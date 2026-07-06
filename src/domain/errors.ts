@@ -46,3 +46,16 @@ export class ValidationError extends Error {
     return out;
   }
 }
+
+/**
+ * Thrown when the persistence layer rejects an operation for a reason that
+ * isn't input validation (e.g. a foreign-key or unique-constraint violation at
+ * the DB level). Carries the underlying cause for diagnostics. Used by the D1
+ * repository to give callers a typed alternative to raw D1 errors.
+ */
+export class RepositoryError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
+    this.name = 'RepositoryError';
+  }
+}

@@ -14,22 +14,22 @@ function subtypeBalanceCases(type: AccountType, normalBalance: 'debit' | 'credit
 
   it(`debit increases balance for ${type}`, () => {
     const bal = computeBalance(type, false, Amount.zero(), Amount.fromMajor(100));
-    expect(bal.signed()).toBe(BigInt(debitSign) * 10000n);
+    expect(bal).toBe(BigInt(debitSign) * 10000n);
   });
 
   it(`credit increases balance for ${type}`, () => {
     const bal = computeBalance(type, false, Amount.fromMajor(100), Amount.zero());
-    expect(bal.signed()).toBe(BigInt(creditSign) * 10000n);
+    expect(bal).toBe(BigInt(creditSign) * 10000n);
   });
 
   it(`contra inverts the debit effect for ${type}`, () => {
     const bal = computeBalance(type, true, Amount.zero(), Amount.fromMajor(100));
-    expect(bal.signed()).toBe(BigInt(-debitSign) * 10000n);
+    expect(bal).toBe(BigInt(-debitSign) * 10000n);
   });
 
   it(`contra inverts the credit effect for ${type}`, () => {
     const bal = computeBalance(type, true, Amount.fromMajor(100), Amount.zero());
-    expect(bal.signed()).toBe(BigInt(-creditSign) * 10000n);
+    expect(bal).toBe(BigInt(-creditSign) * 10000n);
   });
 }
 
@@ -44,22 +44,22 @@ describe('computeBalance', () => {
 describe('aggregateBalances', () => {
   it('sums non-contra accounts of the type', () => {
     const accounts = [
-      { type: AccountType.Asset, contra: false, balance: Amount.fromMajor(100) },
-      { type: AccountType.Asset, contra: false, balance: Amount.fromMajor(50) },
-      { type: AccountType.Liability, contra: false, balance: Amount.fromMajor(999) },
+      { type: AccountType.Asset, contra: false, balance: 10000n },
+      { type: AccountType.Asset, contra: false, balance: 5000n },
+      { type: AccountType.Liability, contra: false, balance: 99900n },
     ];
-    expect(aggregateBalances(accounts, AccountType.Asset).toJSON()).toBe('15000');
+    expect(aggregateBalances(accounts, AccountType.Asset)).toBe(15000n);
   });
 
   it('subtracts contra accounts', () => {
     const accounts = [
-      { type: AccountType.Asset, contra: false, balance: Amount.fromMajor(100) },
-      { type: AccountType.Asset, contra: true, balance: Amount.fromMajor(30) },
+      { type: AccountType.Asset, contra: false, balance: 10000n },
+      { type: AccountType.Asset, contra: true, balance: 3000n },
     ];
-    expect(aggregateBalances(accounts, AccountType.Asset).toJSON()).toBe('7000');
+    expect(aggregateBalances(accounts, AccountType.Asset)).toBe(7000n);
   });
 
   it('returns zero when no accounts of the type', () => {
-    expect(aggregateBalances([], AccountType.Asset).isZero()).toBe(true);
+    expect(aggregateBalances([], AccountType.Asset)).toBe(0n);
   });
 });

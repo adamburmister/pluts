@@ -15,9 +15,11 @@ export interface ResolvedAmountLine {
 /**
  * A validated, unpersisted entry: description, date, document, and resolved
  * debit/credit lines (each carrying an `Account` and an `Amount`). Has no id;
- * persistence assigns one. Immutable.
+ * persistence assigns one. Immutable. Carries an optional client-supplied
+ * {@link idempotencyKey} so the repository can dedup retries atomically.
  */
 export interface EntryPayload {
+  readonly idempotencyKey?: string;
   readonly description: string;
   readonly date: string;
   readonly commercialDocument: CommercialDocumentRef | null;
@@ -40,7 +42,10 @@ export class AmountRecord {
 
 /**
  * A persisted journal entry: one or more debits and credits that balance.
- * Immutable; constructed fully-formed with assigned ids and timestamps.
+ * Immutable; constructed fully-formed with an assigned id and a posted-at
+ * timestamp (when it was recorded). The `date` field is the transaction date
+ * (when the economic event occurred) — kept distinct from `postedAt` for audit
+ * clarity.
  */
 export class Entry {
   constructor(
@@ -50,8 +55,7 @@ export class Entry {
     readonly commercialDocument: CommercialDocumentRef | null,
     readonly debitAmounts: readonly AmountRecord[],
     readonly creditAmounts: readonly AmountRecord[],
-    readonly createdAt: string,
-    readonly updatedAt: string,
+    readonly postedAt: string,
   ) {}
 }
 
@@ -84,6 +88,7 @@ export function buildEntry(
   }
   const { description, commercialDocument, debits, credits } = parsed.data;
   const date = parsed.data.date ?? toDateISO(now());
+  const { idempotencyKey } = parsed.data;
 
   // Resolve accounts by name (post-parse). Unresolved names become issues.
   const issues: ValidationIssue[] = [];
@@ -120,13 +125,15 @@ export function buildEntry(
     throw new ValidationError(issues);
   }
 
-  return {
+  const payload: EntryPayload = {
     description,
     date,
     commercialDocument: commercialDocument ?? null,
     debits: resolvedDebits,
     credits: resolvedCredits,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
   };
+  return payload;
 }
 
 /** Build {@link AmountRecord}s from a payload, assigning fresh ids. */

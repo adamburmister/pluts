@@ -4,6 +4,7 @@ import { D1Repository } from '../../src/db/d1-repository.js';
 import { Account } from '../../src/domain/account.js';
 import { Amount } from '../../src/domain/amount.js';
 import { type EntryPayload } from '../../src/domain/entry.js';
+import { ValidationError } from '../../src/domain/errors.js';
 import { AccountType } from '../../src/domain/types.js';
 import { createTestD1, truncateAll } from '../helpers/miniflare.js';
 
@@ -62,6 +63,22 @@ describe('D1Repository', () => {
       await repo.insertAccount({ name: 'Rev', type: AccountType.Revenue, contra: false });
       const assets = await repo.getAccountsByType(AccountType.Asset);
       expect(assets).toHaveLength(2);
+    });
+
+    it('maps a duplicate insert to a ValidationError (not a raw D1 error)', async () => {
+      await repo.insertAccount({ name: 'Cash', type: AccountType.Asset, contra: false });
+      // Both calls pass any application-level check (the TOCTOU window); the DB
+      // unique index is the source of truth and insertAccount must surface the
+      // violation as a ValidationError.
+      await expect(
+        repo.insertAccount({ name: 'Cash', type: AccountType.Asset, contra: false }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it('rejects a CHECK-violating account type at the DB level', async () => {
+      await expect(
+        repo.insertAccount({ name: 'Bad', type: 'Foo' as AccountType, contra: false }),
+      ).rejects.toThrow();
     });
   });
 

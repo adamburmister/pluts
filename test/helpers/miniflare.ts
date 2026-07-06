@@ -22,6 +22,6 @@ export async function createTestD1(): Promise<D1Database> {
 /** Drops all Pluts tables (for per-test isolation without recreating the DB). */
 export async function truncateAll(d1: D1Database): Promise<void> {
   await d1.exec(
-    'DELETE FROM pluts_amounts; DELETE FROM pluts_entries; DELETE FROM pluts_accounts;',
+    'DELETE FROM pluts_entry_keys; DELETE FROM pluts_amounts; DELETE FROM pluts_entries; DELETE FROM pluts_accounts;',
   );
 }

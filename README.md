@@ -39,10 +39,13 @@ All public input boundaries are Zod-gated: entry input, account creation, amount
 
 ### Persistence
 
-Pluts uses [Drizzle ORM](https://orm.drizzle.team) over Cloudflare D1. The `Repository` interface decouples the domain from persistence, so the domain can be unit-tested with an in-memory repository. `D1Repository` is the production implementation.
+Pluts uses [Drizzle ORM](https://orm.drizzle.team) over Cloudflare D1. The `Repository` interface decouples the domain from persistence, so the domain can be unit-tested with an in-memory repository. `D1Repository` wraps a `DrizzleD1Database` and is the production implementation — it uses the Drizzle query builder (`db.select()`, `db.insert()`, `db.batch()`) rather than raw SQL.
 
+- `src/db/schema.ts` is the single source of truth for DDL (Drizzle table objects).
+- [drizzle-kit](https://orm.drizzle.team/docs/kit-overview) generates versioned SQL migrations from the schema into `./drizzle/`. `bun run db:generate` runs `drizzle-kit generate` and then regenerates the embedded `src/db/migrations.ts`.
+- At runtime, `migrate(db)` applies any pending migrations from the embedded `MIGRATIONS` module — mirroring drizzle-orm's own `migrate()` (same `__drizzle_migrations` tracking table, `folderMillis`/`hash` comparison) but with no filesystem dependency, so it works in a deployed Cloudflare Worker. Dev, prod, and tests share one code path.
 - `wrangler` runs a local D1 instance for development and testing.
-- In production, Pluts is intended to be hosted within a Durable Object, where each DO instance binds to its own D1 database.
+- In production, Pluts is intended to be hosted within a Durable Object, where each DO instance binds to its own D1 database; `migrate(env.DB)` self-provisions each one.
 
 ### Tenancy
 
@@ -50,13 +53,14 @@ Tenancy is intentionally **not** included. Multi-tenancy is provided by Durable 
 
 ### Schema
 
-Three tables (prefixed `pluts_`):
+Four tables (prefixed `pluts_`), defined in `src/db/schema.ts`:
 
-- `pluts_accounts` — id, name, type, contra
-- `pluts_entries` — id, description, date, commercial_document_id/type
+- `pluts_accounts` — id, name, type (CHECK-constrained to the five account types), contra, created_at
+- `pluts_entries` — id, description, date, commercial_document_id/type, posted_at
 - `pluts_amounts` — id, type (`'credit'` | `'debit'`), account_id, entry_id, amount (integer minor units)
+- `pluts_entry_keys` — key, entry_id (idempotency-key dedup table)
 
-Run `migrate(db)` to create them idempotently.
+Run `migrate(db)` to apply pending migrations; it is idempotent and a no-op on an up-to-date database.
 
 ## Installation
 
@@ -167,6 +171,24 @@ The unit tests cover amount math, balance computation for all account types and 
 bun install
 bun run dev   # wrangler dev (local D1)
 ```
+
+### Migrations
+
+Schema changes are made in `src/db/schema.ts`, then materialised into versioned SQL via:
+
+```sh
+bun run db:generate   # drizzle-kit generate + regenerate src/db/migrations.ts
+```
+
+Both `./drizzle/` (the generated migrations + `meta/_journal.json`) and `src/db/migrations.ts` (the embedded copy the runtime migrator reads) are committed so library consumers get migrations without running the generator.
+
+Fresh-DBs only: drizzle-kit's baseline migration uses `CREATE TABLE` (not `IF NOT EXISTS`), so a local D1 provisioned by an older migrator will conflict. After pulling schema changes, wipe the local dev D1 once so it is recreated cleanly:
+
+```sh
+rm -rf .wrangler/state/v3/d1
+```
+
+The next `bun run dev` / `bun run test` provisions a fresh D1 and `migrate()` applies the baseline cleanly.
 
 ## License
 

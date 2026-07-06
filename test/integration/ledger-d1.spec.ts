@@ -1,7 +1,7 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { D1Repository } from '../../src/db/d1-repository.js';
-import { Amount } from '../../src/domain/amount.js';
+import { Amount, formatAmount } from '../../src/domain/amount.js';
 import { ValidationError } from '../../src/domain/errors.js';
 import { Ledger } from '../../src/domain/ledger.js';
 import { AccountType } from '../../src/domain/types.js';
@@ -37,9 +37,9 @@ describe('Ledger over D1 (end-to-end)', () => {
       ],
     });
 
-    expect((await ledger.accountBalance(cash)).isZero()).toBe(true);
+    expect(await ledger.accountBalance(cash)).toBe(0n);
     const ar = (await ledger.getAccountByName('Accounts Receivable'))!;
-    expect((await ledger.accountBalance(ar)).toMajor()).toBe('50.00');
+    expect(formatAmount(await ledger.accountBalance(ar))).toBe('50.00');
   });
 
   it('rejects unbalanced entries', async () => {
@@ -117,7 +117,7 @@ describe('Ledger over D1 (end-to-end)', () => {
       });
     }
 
-    expect((await ledger.trialBalance()).isZero()).toBe(true);
+    expect(await ledger.trialBalance()).toBe(0n);
   });
 
   it('generates a balanced balance sheet and an income statement', async () => {
@@ -143,11 +143,11 @@ describe('Ledger over D1 (end-to-end)', () => {
     });
 
     const bs = await ledger.balanceSheet();
-    expect(bs.balanced.isZero()).toBe(true);
-    expect(bs.assets.toMajor()).toBe('1200.00');
+    expect(bs.balanced).toBe(0n);
+    expect(formatAmount(bs.assets)).toBe('1200.00');
 
     const is = await ledger.incomeStatement({ fromDate: '2000-01-01', toDate: '2999-12-31' });
-    expect(is.netIncome.toMajor()).toBe('200.00');
+    expect(formatAmount(is.netIncome)).toBe('200.00');
   });
 
   it('enforces account name uniqueness', async () => {
@@ -155,5 +155,28 @@ describe('Ledger over D1 (end-to-end)', () => {
     await expect(
       ledger.createAccount({ name: 'Cash', type: AccountType.Asset }),
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('deduplicates entries by idempotency key', async () => {
+    await ledger.createAccount({ name: 'Cash', type: AccountType.Asset });
+    await ledger.createAccount({ name: 'Revenue', type: AccountType.Revenue });
+
+    const input = {
+      idempotencyKey: 'req-abc',
+      description: 'Sale',
+      debits: [{ accountName: 'Cash', amount: Amount.fromMajor(100) }],
+      credits: [{ accountName: 'Revenue', amount: Amount.fromMajor(100) }],
+    };
+
+    const first = await ledger.postEntry(input);
+    const retry = await ledger.postEntry({ ...input, description: 'Sale (retry)' });
+
+    expect(retry.id).toBe(first.id);
+    expect(retry.description).toBe('Sale');
+    expect(await ledger.allEntries()).toHaveLength(1);
+
+    // The key must map back to the entry via the repository too.
+    const byKey = await new D1Repository(d1).getEntryByKey('req-abc');
+    expect(byKey?.id).toBe(first.id);
   });
 });

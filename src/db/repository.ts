@@ -19,6 +19,8 @@ export interface Repository {
   insertEntry(payload: EntryPayload): Promise<Entry>;
 
   getEntry(id: string): Promise<Entry | null>;
+  /** Look up an entry by its client-supplied idempotency key, or null if none. */
+  getEntryByKey(key: string): Promise<Entry | null>;
   allEntries(order?: 'asc' | 'desc'): Promise<Entry[]>;
 
   /** Sum of credit amounts for an account, optionally within a date range. */

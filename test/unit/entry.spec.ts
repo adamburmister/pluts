@@ -7,7 +7,7 @@ import { type EntryInput } from '../../src/domain/schemas.js';
 import { AccountType } from '../../src/domain/types.js';
 
 function acct(name: string, type = AccountType.Asset): Account {
-  return new Account(`id-${name}`, name, type, false, '', '');
+  return new Account(`id-${name}`, name, type, false, '');
 }
 
 function baseInput(overrides: Partial<EntryInput> = {}): EntryInput {

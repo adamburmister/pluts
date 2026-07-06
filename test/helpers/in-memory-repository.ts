@@ -7,6 +7,7 @@ import {
   type EntryPayload,
   amountsFromPayload,
 } from '../../src/domain/entry.js';
+import { ValidationError } from '../../src/domain/errors.js';
 import {
   type AccountType,
   type CommercialDocumentRef,
@@ -20,7 +21,6 @@ interface MemAccount {
   type: AccountType;
   contra: boolean;
   createdAt: string;
-  updatedAt: string;
   credits: { amount: Amount; entryId: string }[];
   debits: { amount: Amount; entryId: string }[];
 }
@@ -29,8 +29,7 @@ interface MemEntry {
   description: string;
   date: string;
   doc: CommercialDocumentRef | null;
-  createdAt: string;
-  updatedAt: string;
+  postedAt: string;
   debitAmounts: AmountRecord[];
   creditAmounts: AmountRecord[];
 }
@@ -51,6 +50,7 @@ export class InMemoryRepository implements Repository {
   private accounts = new Map<string, MemAccount>();
   private entries = new Map<string, MemEntry>();
   private nameIndex = new Map<string, string>();
+  private keyToEntry = new Map<string, string>();
 
   async insertAccount(input: {
     name: string;
@@ -59,7 +59,10 @@ export class InMemoryRepository implements Repository {
   }): Promise<Account> {
     const key = `${input.name}\0${input.type}`;
     if (this.nameIndex.has(key)) {
-      throw new Error(`Account name "${input.name}" (${input.type}) already exists`);
+      throw new ValidationError(
+        [{ path: ['name'], message: 'has already been taken' }],
+        'Account already exists',
+      );
     }
     const id = uuid();
     const now = new Date().toISOString();
@@ -69,17 +72,16 @@ export class InMemoryRepository implements Repository {
       type: input.type,
       contra: input.contra,
       createdAt: now,
-      updatedAt: now,
       credits: [],
       debits: [],
     };
     this.accounts.set(id, rec);
     this.nameIndex.set(key, id);
-    return new Account(id, input.name, input.type, input.contra, now, now);
+    return new Account(id, input.name, input.type, input.contra, now);
   }
 
   private toAccount(rec: MemAccount): Account {
-    return new Account(rec.id, rec.name, rec.type, rec.contra, rec.createdAt, rec.updatedAt);
+    return new Account(rec.id, rec.name, rec.type, rec.contra, rec.createdAt);
   }
 
   async getAccount(id: string): Promise<Account | null> {
@@ -121,17 +123,24 @@ export class InMemoryRepository implements Repository {
       description: payload.description,
       date: payload.date,
       doc: payload.commercialDocument,
-      createdAt: now,
-      updatedAt: now,
+      postedAt: now,
       debitAmounts: debits,
       creditAmounts: credits,
     };
     this.entries.set(id, memEntry);
+    if (payload.idempotencyKey) this.keyToEntry.set(payload.idempotencyKey, id);
     return this.toEntry(memEntry);
   }
 
   async getEntry(id: string): Promise<Entry | null> {
     const mem = this.entries.get(id);
+    return mem ? this.toEntry(mem) : null;
+  }
+
+  async getEntryByKey(key: string): Promise<Entry | null> {
+    const entryId = this.keyToEntry.get(key);
+    if (!entryId) return null;
+    const mem = this.entries.get(entryId);
     return mem ? this.toEntry(mem) : null;
   }
 
@@ -160,9 +169,9 @@ export class InMemoryRepository implements Repository {
     for (const rec of this.accounts.values()) {
       if (rec.type !== type) continue;
       const list = kind === 'credit' ? rec.credits : rec.debits;
-      total += this.sum(list, range).signed();
+      total += this.sum(list, range).minor;
     }
-    return Amount.fromSigned(total);
+    return Amount.fromMinor(total);
   }
 
   async amountsForAccount(accountId: string): Promise<AmountRecord[]> {
@@ -199,9 +208,9 @@ export class InMemoryRepository implements Repository {
       const entry = this.entries.get(item.entryId);
       if (!entry) continue;
       if (!inRange(entry.date, range)) continue;
-      total += item.amount.signed();
+      total += item.amount.minor;
     }
-    return Amount.fromSigned(total);
+    return Amount.fromMinor(total);
   }
 
   private toEntry(mem: MemEntry): Entry {
@@ -212,8 +221,7 @@ export class InMemoryRepository implements Repository {
       mem.doc,
       mem.debitAmounts,
       mem.creditAmounts,
-      mem.createdAt,
-      mem.updatedAt,
+      mem.postedAt,
     );
   }
 }

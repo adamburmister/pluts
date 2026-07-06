@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Account } from '../../src/domain/account.js';
-import { Amount } from '../../src/domain/amount.js';
+import { Amount, formatAmount } from '../../src/domain/amount.js';
 import { ValidationError } from '../../src/domain/errors.js';
 import { Ledger } from '../../src/domain/ledger.js';
 import { AccountType } from '../../src/domain/types.js';
@@ -53,7 +53,7 @@ describe('Ledger (in-memory)', () => {
       expect(entry.description).toBe('Sale');
 
       const bal = await ledger.accountBalance(cash);
-      expect(bal.toMajor()).toBe('100.00');
+      expect(formatAmount(bal)).toBe('100.00');
     });
 
     it('accepts account objects directly', async () => {
@@ -116,6 +116,44 @@ describe('Ledger (in-memory)', () => {
     });
   });
 
+  describe('idempotency', () => {
+    it('returns the previously-persisted entry for a repeated idempotency key', async () => {
+      await ledger.createAccount({ name: 'Cash', type: AccountType.Asset });
+      await ledger.createAccount({ name: 'Revenue', type: AccountType.Revenue });
+
+      const input = {
+        idempotencyKey: 'req-123',
+        description: 'Sale',
+        debits: [{ accountName: 'Cash', amount: Amount.fromMajor(100) }],
+        credits: [{ accountName: 'Revenue', amount: Amount.fromMajor(100) }],
+      };
+
+      const first = await ledger.postEntry(input);
+      // Retry with the same key (and a different payload) must return the same
+      // entry, never post a duplicate.
+      const retry = await ledger.postEntry({
+        ...input,
+        description: 'Sale (retry)',
+      });
+      expect(retry.id).toBe(first.id);
+      expect(retry.description).toBe('Sale');
+      expect(await ledger.allEntries()).toHaveLength(1);
+    });
+
+    it('posts independently when no key is supplied', async () => {
+      await ledger.createAccount({ name: 'Cash', type: AccountType.Asset });
+      await ledger.createAccount({ name: 'Revenue', type: AccountType.Revenue });
+      const base = {
+        description: 'Sale',
+        debits: [{ accountName: 'Cash', amount: Amount.fromMajor(100) }],
+        credits: [{ accountName: 'Revenue', amount: Amount.fromMajor(100) }],
+      };
+      await ledger.postEntry(base);
+      await ledger.postEntry(base);
+      expect(await ledger.allEntries()).toHaveLength(2);
+    });
+  });
+
   describe('balances by type and date ranges', () => {
     it('aggregates balances across accounts of a type', async () => {
       await ledger.createAccount({ name: 'Cash', type: AccountType.Asset });
@@ -135,15 +173,15 @@ describe('Ledger (in-memory)', () => {
         credits: [{ accountName: 'Revenue', amount: Amount.fromMajor(50) }],
       });
 
-      expect((await ledger.balanceByType(AccountType.Asset)).toMajor()).toBe('150.00');
-      expect((await ledger.balanceByType(AccountType.Revenue)).toMajor()).toBe('150.00');
+      expect(formatAmount(await ledger.balanceByType(AccountType.Asset))).toBe('150.00');
+      expect(formatAmount(await ledger.balanceByType(AccountType.Revenue))).toBe('150.00');
 
       // Date range filter
       const partial = await ledger.balanceByType(AccountType.Asset, {
         fromDate: '2024-01-01',
         toDate: '2024-02-01',
       });
-      expect(partial.toMajor()).toBe('100.00');
+      expect(formatAmount(partial)).toBe('100.00');
     });
 
     it('subtracts contra accounts in balanceByType', async () => {
@@ -169,18 +207,18 @@ describe('Ledger (in-memory)', () => {
       });
 
       // Cash asset: 1000 - 400 = 600
-      expect((await ledger.balanceByType(AccountType.Asset)).toMajor()).toBe('600.00');
+      expect(formatAmount(await ledger.balanceByType(AccountType.Asset))).toBe('600.00');
       // Equity: Common Stock 1000 minus contra Drawing 400 = 600
-      expect((await ledger.balanceByType(AccountType.Equity)).toMajor()).toBe('600.00');
+      expect(formatAmount(await ledger.balanceByType(AccountType.Equity))).toBe('600.00');
       // Assets == Liabilities + Equity
       const bs = await ledger.balanceSheet();
-      expect(bs.balanced.isZero()).toBe(true);
+      expect(bs.balanced).toBe(0n);
     });
   });
 
   describe('trialBalance', () => {
     it('is zero with no entries', async () => {
-      expect((await ledger.trialBalance()).isZero()).toBe(true);
+      expect(await ledger.trialBalance()).toBe(0n);
     });
 
     /**
@@ -235,7 +273,34 @@ describe('Ledger (in-memory)', () => {
         });
       }
 
-      expect((await ledger.trialBalance()).isZero()).toBe(true);
+      expect(await ledger.trialBalance()).toBe(0n);
+    });
+
+    /**
+     * A point-in-time trial balance (entries up to a date) must still net to
+     * zero: every balanced entry is self-cancelling across account types.
+     */
+    it('is zero within a date range', async () => {
+      await ledger.createAccount({ name: 'Cash', type: AccountType.Asset });
+      await ledger.createAccount({ name: 'Revenue', type: AccountType.Revenue });
+      await ledger.createAccount({ name: 'Expense', type: AccountType.Expense });
+
+      await ledger.postEntry({
+        description: 'Earn',
+        date: '2024-01-15',
+        debits: [{ accountName: 'Cash', amount: Amount.fromMajor(100) }],
+        credits: [{ accountName: 'Revenue', amount: Amount.fromMajor(100) }],
+      });
+      await ledger.postEntry({
+        description: 'Spend',
+        date: '2024-06-15',
+        debits: [{ accountName: 'Expense', amount: Amount.fromMajor(30) }],
+        credits: [{ accountName: 'Cash', amount: Amount.fromMajor(30) }],
+      });
+
+      expect(await ledger.trialBalance()).toBe(0n);
+      expect(await ledger.trialBalance({ toDate: '2024-02-01' })).toBe(0n);
+      expect(await ledger.trialBalance({ fromDate: '2024-06-01' })).toBe(0n);
     });
   });
 
@@ -249,9 +314,9 @@ describe('Ledger (in-memory)', () => {
         credits: [{ accountName: 'Equity', amount: Amount.fromMajor(500) }],
       });
       const bs = await ledger.balanceSheet();
-      expect(bs.assets.toMajor()).toBe('500.00');
-      expect(bs.equity.toMajor()).toBe('500.00');
-      expect(bs.balanced.isZero()).toBe(true);
+      expect(formatAmount(bs.assets)).toBe('500.00');
+      expect(formatAmount(bs.equity)).toBe('500.00');
+      expect(bs.balanced).toBe(0n);
     });
 
     it('produces an income statement', async () => {
@@ -269,9 +334,9 @@ describe('Ledger (in-memory)', () => {
         credits: [{ accountName: 'Cash', amount: Amount.fromMajor(100) }],
       });
       const is = await ledger.incomeStatement();
-      expect(is.revenue.toMajor()).toBe('300.00');
-      expect(is.expenses.toMajor()).toBe('100.00');
-      expect(is.netIncome.toMajor()).toBe('200.00');
+      expect(formatAmount(is.revenue)).toBe('300.00');
+      expect(formatAmount(is.expenses)).toBe('100.00');
+      expect(formatAmount(is.netIncome)).toBe('200.00');
     });
   });
 

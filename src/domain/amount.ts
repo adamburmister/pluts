@@ -18,6 +18,12 @@ const FACTOR = 10n ** BigInt(SCALE);
  * Amounts are exact integers in storage; rounding to the supported scale only
  * happens at the input boundary ({@link Amount.fromMajor}) using half-up
  * rounding. This keeps posted entries and the trial balance exact.
+ *
+ * An {@link Amount} is strictly non-negative: it represents a *quantity* of
+ * money, not a signed *balance*. Balance arithmetic (which may legitimately be
+ * negative) operates on raw `bigint` and is formatted with {@link formatAmount};
+ * see {@link computeBalance}. This separation keeps the type's non-negative
+ * invariant honest — there is no `neg()`/`fromSigned()` back door.
  */
 export class Amount {
   private constructor(readonly minor: bigint) {}
@@ -85,20 +91,6 @@ export class Amount {
     return new Amount(this.minor * s);
   }
 
-  neg(): Amount {
-    return new Amount(-this.minor);
-  }
-
-  /** Return this amount's minor units as a signed bigint (for balance math). */
-  signed(): bigint {
-    return this.minor;
-  }
-
-  /** Build an Amount from a possibly-negative signed bigint (internal balance use). */
-  static fromSigned(signed: bigint): Amount {
-    return new Amount(signed);
-  }
-
   eq(other: Amount): boolean {
     return this.minor === other.minor;
   }
@@ -129,11 +121,9 @@ export class Amount {
 
   /** Display as a fixed-precision major-unit string, e.g. "10.00". */
   toMajor(): string {
-    const sign = this.minor < 0n ? '-' : '';
-    const abs = this.minor < 0n ? -this.minor : this.minor;
-    const whole = abs / FACTOR;
-    const frac = abs % FACTOR;
-    return `${sign}${whole}.${frac.toString().padStart(SCALE, '0')}`;
+    const whole = this.minor / FACTOR;
+    const frac = this.minor % FACTOR;
+    return `${whole}.${frac.toString().padStart(SCALE, '0')}`;
   }
 
   toJSON(): string {
@@ -143,4 +133,18 @@ export class Amount {
   toString(): string {
     return this.toMajor();
   }
+}
+
+/**
+ * Format a signed balance (raw minor-unit `bigint`, possibly negative) as a
+ * fixed-precision major-unit string, e.g. "10.00" or "-3.50". This is the
+ * display helper for balance computations, which return `bigint` rather than
+ * the strictly-non-negative {@link Amount}.
+ */
+export function formatAmount(minor: bigint): string {
+  const sign = minor < 0n ? '-' : '';
+  const abs = minor < 0n ? -minor : minor;
+  const whole = abs / FACTOR;
+  const frac = abs % FACTOR;
+  return `${sign}${whole}.${frac.toString().padStart(SCALE, '0')}`;
 }

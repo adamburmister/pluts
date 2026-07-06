@@ -10,6 +10,11 @@ import { AccountType, toDateISO } from './types.js';
  * `Amount` via half-up rounding at the supported scale, so float imprecision
  * (e.g. `0.1 + 0.2`) is resolved at the input boundary. Stored values stay
  * exact integers.
+ *
+ * `z.custom<Amount>` (rather than `z.instanceof(Amount)`) is used because
+ * {@link Amount} has a private constructor and Zod v4's `z.instanceof`
+ * requires a public one. `amountLineSchema` below uses `z.instanceof(Account)`
+ * because `Account`'s constructor is public.
  */
 export const amountSchema = z
   .union([
@@ -65,6 +70,7 @@ export type AmountInput = z.input<typeof amountLineSchema>;
 /** Input shape for building an entry (mirrors Ruby's `Entry.new` hash). */
 export const entryInputSchema = z
   .object({
+    idempotencyKey: z.string().min(1).optional(),
     description: z.string().min(1),
     date: isoDateSchema.optional(),
     commercialDocument: commercialDocumentSchema,
@@ -86,8 +92,8 @@ export const entryInputSchema = z
         message: 'Entry must have at least one credit amount',
       });
     }
-    const debitSum = v.debits.reduce((acc, l) => acc + l.amount.signed(), 0n);
-    const creditSum = v.credits.reduce((acc, l) => acc + l.amount.signed(), 0n);
+    const debitSum = v.debits.reduce((acc, l) => acc + l.amount.minor, 0n);
+    const creditSum = v.credits.reduce((acc, l) => acc + l.amount.minor, 0n);
     if (debitSum !== creditSum) {
       ctx.addIssue({
         code: 'custom',

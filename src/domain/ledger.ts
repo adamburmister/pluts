@@ -1,27 +1,34 @@
-import type { z } from 'zod';
 import type { Repository } from '../db/repository.js';
 import { type Account, aggregateBalances, computeBalance } from './account.js';
-import { Amount } from './amount.js';
-import { type Entry, type EntryPayload, buildEntry } from './entry.js';
+import { type AmountRecord, type Entry, type EntryPayload, buildEntry } from './entry.js';
 import { ValidationError } from './errors.js';
-import { type EntryInput, createAccountSchema, toIssues } from './schemas.js';
+import {
+  type CreateAccountInput,
+  type EntryInput,
+  createAccountSchema,
+  toIssues,
+} from './schemas.js';
 import { AccountType, type DateRange } from './types.js';
 
+/**
+ * Balances are signed `bigint` minor units. A balance may legitimately be
+ * negative (e.g. an overdrawn asset), which the strictly-non-negative
+ * {@link Amount} type cannot represent, so report fields expose raw `bigint`.
+ * Format for display with {@link formatAmount} from `./amount.js`.
+ */
 export interface BalanceSheet {
-  assets: Amount;
-  liabilities: Amount;
-  equity: Amount;
+  assets: bigint;
+  liabilities: bigint;
+  equity: bigint;
   /** Assets - (Liabilities + Equity + Net Income). Should be zero in a balanced ledger. */
-  balanced: Amount;
+  balanced: bigint;
 }
 
 export interface IncomeStatement {
-  revenue: Amount;
-  expenses: Amount;
-  netIncome: Amount;
+  revenue: bigint;
+  expenses: bigint;
+  netIncome: bigint;
 }
-
-export type CreateAccountInput = z.input<typeof createAccountSchema>;
 
 /**
  * High-level facade over a {@link Repository}. Provides the accounting
@@ -36,13 +43,9 @@ export class Ledger {
     if (!parsed.success) {
       throw new ValidationError(toIssues(parsed.error.issues), 'Invalid account input');
     }
-    const existing = await this.repo.getAccountByName(parsed.data.name);
-    if (existing) {
-      throw new ValidationError(
-        [{ path: ['name'], message: 'has already been taken' }],
-        'Account already exists',
-      );
-    }
+    // The DB unique index (name, type) is the source of truth; insertAccount
+    // catches the constraint violation and re-throws as ValidationError. This
+    // avoids a check-then-act TOCTOU window under concurrent DO requests.
     return this.repo.insertAccount(parsed.data);
   }
 
@@ -53,6 +56,15 @@ export class Ledger {
    * on failure with a flat list of path-tagged issues.
    */
   async postEntry(input: EntryInput): Promise<Entry> {
+    // Exactly-once posting: if a client-supplied idempotency key is present and
+    // a matching entry was already persisted, return it instead of re-posting.
+    // This guards against retries in a Durable Object (network replays or
+    // re-execution after eviction) that would otherwise create a silent duplicate.
+    if (input.idempotencyKey) {
+      const existing = await this.repo.getEntryByKey(input.idempotencyKey);
+      if (existing) return existing;
+    }
+
     const names = new Set<string>();
     for (const a of [...input.debits, ...input.credits]) {
       if (a.accountName) names.add(a.accountName);
@@ -75,8 +87,13 @@ export class Ledger {
     return this.repo.getAccountByName(name);
   }
 
+  /** All accounts, ordered by name. */
+  async allAccounts(): Promise<Account[]> {
+    return this.repo.allAccounts();
+  }
+
   /** Balance of a single account, optionally within a date range. */
-  async accountBalance(account: Account, range?: DateRange): Promise<Amount> {
+  async accountBalance(account: Account, range?: DateRange): Promise<bigint> {
     const [credits, debits] = await Promise.all([
       this.repo.sumCredits(account.id, range),
       this.repo.sumDebits(account.id, range),
@@ -85,7 +102,7 @@ export class Ledger {
   }
 
   /** Aggregate balance of all accounts of a type (contra accounts subtracted). */
-  async balanceByType(type: AccountType, range?: DateRange): Promise<Amount> {
+  async balanceByType(type: AccountType, range?: DateRange): Promise<bigint> {
     const accounts = await this.repo.getAccountsByType(type);
     const balances = await Promise.all(
       accounts.map(async (a) => ({
@@ -99,20 +116,19 @@ export class Ledger {
 
   /**
    * Trial balance: should always be zero for a balanced ledger.
-   * Asset - (Liability + Equity + Revenue - Expense).
+   * Asset - (Liability + Equity + Revenue - Expense). Optionally scoped to a
+   * date range (all entries up to/within the range), matching `balanceSheet`
+   * and `incomeStatement`.
    */
-  async trialBalance(): Promise<Amount> {
+  async trialBalance(range?: DateRange): Promise<bigint> {
     const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
-      this.balanceByType(AccountType.Asset),
-      this.balanceByType(AccountType.Liability),
-      this.balanceByType(AccountType.Equity),
-      this.balanceByType(AccountType.Revenue),
-      this.balanceByType(AccountType.Expense),
+      this.balanceByType(AccountType.Asset, range),
+      this.balanceByType(AccountType.Liability, range),
+      this.balanceByType(AccountType.Equity, range),
+      this.balanceByType(AccountType.Revenue, range),
+      this.balanceByType(AccountType.Expense, range),
     ]);
-    return Amount.fromSigned(
-      assets.signed() -
-        (liabilities.signed() + equity.signed() + revenue.signed() - expenses.signed()),
-    );
+    return assets - (liabilities + equity + revenue - expenses);
   }
 
   async balanceSheet(range?: DateRange): Promise<BalanceSheet> {
@@ -126,14 +142,12 @@ export class Ledger {
     // Net income (revenue - expenses) is retained earnings, part of equity on
     // a real balance sheet. The balanced check includes it so the accounting
     // equation holds: Assets = Liabilities + Equity + Net Income.
-    const netIncome = Amount.fromSigned(revenue.signed() - expenses.signed());
+    const netIncome = revenue - expenses;
     return {
       assets,
       liabilities,
       equity,
-      balanced: Amount.fromSigned(
-        assets.signed() - (liabilities.signed() + equity.signed() + netIncome.signed()),
-      ),
+      balanced: assets - (liabilities + equity + netIncome),
     };
   }
 
@@ -145,7 +159,7 @@ export class Ledger {
     return {
       revenue,
       expenses,
-      netIncome: Amount.fromSigned(revenue.signed() - expenses.signed()),
+      netIncome: revenue - expenses,
     };
   }
 
@@ -153,7 +167,7 @@ export class Ledger {
     return this.repo.entriesForAccount(account.id);
   }
 
-  async amountsForAccount(account: Account) {
+  async amountsForAccount(account: Account): Promise<AmountRecord[]> {
     return this.repo.amountsForAccount(account.id);
   }
 

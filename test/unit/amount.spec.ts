@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Amount, SCALE } from '../../src/domain/amount.js';
+import { Amount, SCALE, formatAmount } from '../../src/domain/amount.js';
 
 describe('Amount', () => {
   it('exposes a 2-decimal scale', () => {
@@ -59,8 +59,8 @@ describe('Amount', () => {
       expect(Amount.fromMajor('1.50').mul(3).toJSON()).toBe('450');
       expect(() => Amount.fromMajor(1).mul(-1)).toThrow();
     });
-    it('negates for balance math', () => {
-      expect(Amount.fromMajor(5).neg().signed()).toBe(-500n);
+    it('is strictly non-negative (no neg/fromSigned back door)', () => {
+      expect(() => Amount.fromMinor(-1n)).toThrow();
     });
   });
 
@@ -82,13 +82,15 @@ describe('Amount', () => {
   });
 
   describe('display', () => {
-    it('formats to fixed-precision major string', () => {
+    it('formats non-negative amounts', () => {
       expect(Amount.fromMinor(1050n).toMajor()).toBe('10.50');
       expect(Amount.fromMinor(5n).toMajor()).toBe('0.05');
       expect(Amount.fromMinor(0n).toMajor()).toBe('0.00');
     });
-    it('handles negative display', () => {
-      expect(Amount.fromSigned(-1050n).toMajor()).toBe('-10.50');
+    it('formatAmount handles signed balances', () => {
+      expect(formatAmount(0n)).toBe('0.00');
+      expect(formatAmount(-1050n)).toBe('-10.50');
+      expect(formatAmount(5n)).toBe('0.05');
     });
   });
 });

@@ -1,4 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
+import { and, asc, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { type DrizzleD1Database, drizzle } from 'drizzle-orm/d1';
 import { Account } from '../domain/account.js';
 import { Amount } from '../domain/amount.js';
 import {
@@ -8,6 +10,7 @@ import {
   type EntryPayload,
   amountsFromPayload,
 } from '../domain/entry.js';
+import { RepositoryError, ValidationError } from '../domain/errors.js';
 import {
   type AccountType,
   type CommercialDocumentRef,
@@ -15,67 +18,55 @@ import {
   toDateISO,
 } from '../domain/types.js';
 import type { Repository } from './repository.js';
+import { accounts, amounts, entries, entryKeys } from './schema.js';
 
-interface AccountRow {
-  id: string;
-  name: string;
-  type: string;
-  contra: number;
-  created_at: string;
-  updated_at: string;
-}
-interface EntryRow {
-  id: string;
-  description: string;
-  date: string;
-  commercial_document_id: string | null;
-  commercial_document_type: string | null;
-  created_at: string;
-  updated_at: string;
-}
-interface AmountRow {
-  id: string;
-  type: string;
-  account_id: string;
-  entry_id: string;
-  amount: number;
-}
+type AccountRow = typeof accounts.$inferSelect;
+type EntryRow = typeof entries.$inferSelect;
+type AmountRow = typeof amounts.$inferSelect;
+
+/** Flat entry-column selection for queries that join other tables. */
+const entrySelection = {
+  id: entries.id,
+  description: entries.description,
+  date: entries.date,
+  commercialDocumentId: entries.commercialDocumentId,
+  commercialDocumentType: entries.commercialDocumentType,
+  postedAt: entries.postedAt,
+};
 
 function uuid(): string {
   return crypto.randomUUID();
 }
 
-function toAccount(row: AccountRow): Account {
-  return new Account(
-    row.id,
-    row.name,
-    row.type as AccountType,
-    row.contra !== 0,
-    row.created_at,
-    row.updated_at,
-  );
+/**
+ * D1 surfaces constraint violations as objects with a `message` property
+ * containing "UNIQUE constraint failed" (case-insensitive). There is no typed
+ * error class, so this string-matches the message. Drizzle propagates the same
+ * D1 error object, so the match still fires through the query-builder path.
+ */
+export function isUniqueConstraintError(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null || !('message' in e)) return false;
+  return /UNIQUE constraint failed/i.test(String((e as { message: unknown }).message));
 }
 
-function dateRangeClause(
-  range: DateRange | undefined,
-  prefix = '',
-): { clause: string; params: unknown[] } {
-  if (!range) return { clause: '', params: [] };
-  const parts: string[] = [];
-  const params: unknown[] = [];
-  if (range.fromDate) {
-    parts.push(`${prefix}date >= ?`);
-    params.push(toDateISO(range.fromDate));
-  }
-  if (range.toDate) {
-    parts.push(`${prefix}date <= ?`);
-    params.push(toDateISO(range.toDate));
-  }
-  return parts.length ? { clause: `AND (${parts.join(' AND ')})`, params } : { clause: '', params };
+function toAccount(row: AccountRow): Account {
+  return new Account(row.id, row.name, row.type as AccountType, row.contra, row.createdAt);
+}
+
+function dateRangeWhere(range: DateRange | undefined): ReturnType<typeof and> | undefined {
+  if (!range) return undefined;
+  const parts = [];
+  if (range.fromDate) parts.push(gte(entries.date, toDateISO(range.fromDate)));
+  if (range.toDate) parts.push(lte(entries.date, toDateISO(range.toDate)));
+  return parts.length ? and(...parts) : undefined;
 }
 
 export class D1Repository implements Repository {
-  constructor(private readonly db: D1Database) {}
+  private readonly db: DrizzleD1Database;
+
+  constructor(d1: D1Database) {
+    this.db = drizzle(d1);
+  }
 
   async insertAccount(input: {
     name: string;
@@ -84,45 +75,52 @@ export class D1Repository implements Repository {
   }): Promise<Account> {
     const id = uuid();
     const now = new Date().toISOString();
-    await this.db
-      .prepare(
-        `INSERT INTO pluts_accounts (id, name, type, contra, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(id, input.name, input.type, input.contra ? 1 : 0, now, now)
-      .run();
-    return new Account(id, input.name, input.type, input.contra, now, now);
+    try {
+      await this.db
+        .insert(accounts)
+        .values({
+          id,
+          name: input.name,
+          type: input.type,
+          contra: input.contra,
+          createdAt: now,
+        })
+        .run();
+    } catch (e) {
+      if (isUniqueConstraintError(e)) {
+        throw new ValidationError(
+          [{ path: ['name'], message: 'has already been taken' }],
+          'Account already exists',
+        );
+      }
+      throw e;
+    }
+    return new Account(id, input.name, input.type, input.contra, now);
   }
 
   async getAccount(id: string): Promise<Account | null> {
-    const r = await this.db
-      .prepare(`SELECT * FROM pluts_accounts WHERE id = ?`)
-      .bind(id)
-      .first<AccountRow>();
-    return r ? toAccount(r) : null;
+    const row = await this.db.select().from(accounts).where(eq(accounts.id, id)).get();
+    return row ? toAccount(row) : null;
   }
 
   async getAccountByName(name: string): Promise<Account | null> {
-    const r = await this.db
-      .prepare(`SELECT * FROM pluts_accounts WHERE name = ?`)
-      .bind(name)
-      .first<AccountRow>();
-    return r ? toAccount(r) : null;
+    const row = await this.db.select().from(accounts).where(eq(accounts.name, name)).get();
+    return row ? toAccount(row) : null;
   }
 
   async getAccountsByType(type: AccountType): Promise<Account[]> {
-    const { results } = await this.db
-      .prepare(`SELECT * FROM pluts_accounts WHERE type = ? ORDER BY name`)
-      .bind(type)
-      .all<AccountRow>();
-    return results.map(toAccount);
+    const rows = await this.db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.type, type))
+      .orderBy(asc(accounts.name))
+      .all();
+    return rows.map(toAccount);
   }
 
   async allAccounts(): Promise<Account[]> {
-    const { results } = await this.db
-      .prepare(`SELECT * FROM pluts_accounts ORDER BY name`)
-      .all<AccountRow>();
-    return results.map(toAccount);
+    const rows = await this.db.select().from(accounts).orderBy(asc(accounts.name)).all();
+    return rows.map(toAccount);
   }
 
   async insertEntry(payload: EntryPayload): Promise<Entry> {
@@ -131,43 +129,71 @@ export class D1Repository implements Repository {
     const doc = payload.commercialDocument;
     const { debits, credits } = amountsFromPayload(payload, id);
 
-    const entryStmt = this.db
-      .prepare(
-        `INSERT INTO pluts_entries
-          (id, description, date, commercial_document_id, commercial_document_type, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(id, payload.description, payload.date, doc?.id ?? null, doc?.type ?? null, now, now);
+    const entryStmt = this.db.insert(entries).values({
+      id,
+      description: payload.description,
+      date: payload.date,
+      commercialDocumentId: doc?.id ?? null,
+      commercialDocumentType: doc?.type ?? null,
+      postedAt: now,
+    });
 
     const amountStmts = [...debits, ...credits].map((a) =>
-      this.db
-        .prepare(
-          `INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount)
-           VALUES (?, ?, ?, ?, ?)`,
-        )
-        .bind(a.id, a.kind, a.account.id, id, Number(a.amount.signed())),
+      this.db.insert(amounts).values({
+        id: a.id,
+        type: a.kind,
+        accountId: a.account.id,
+        entryId: id,
+        amount: Number(a.amount.minor),
+      }),
     );
 
-    await this.db.batch([entryStmt, ...amountStmts]);
+    // Persist the idempotency key in the same atomic batch so a retry that
+    // races with the key insert can never leave a keyless duplicate entry.
+    const keyStmts = payload.idempotencyKey
+      ? [this.db.insert(entryKeys).values({ key: payload.idempotencyKey, entryId: id })]
+      : [];
 
-    return new Entry(id, payload.description, payload.date, doc, debits, credits, now, now);
+    try {
+      await this.db.batch([entryStmt, ...amountStmts, ...keyStmts]);
+    } catch (e) {
+      // Two concurrent posts sharing an idempotency key can race past the
+      // pre-check in Ledger.postEntry; the loser's key insert hits the unique
+      // constraint. Recover by returning the already-persisted entry.
+      if (payload.idempotencyKey && isUniqueConstraintError(e)) {
+        const existing = await this.getEntryByKey(payload.idempotencyKey);
+        if (existing) return existing;
+      }
+      throw new RepositoryError('Failed to persist entry', e);
+    }
+
+    return new Entry(id, payload.description, payload.date, doc, debits, credits, now);
   }
 
   async getEntry(id: string): Promise<Entry | null> {
+    const row = await this.db.select().from(entries).where(eq(entries.id, id)).get();
+    if (!row) return null;
+    return this.loadEntry(row);
+  }
+
+  async getEntryByKey(key: string): Promise<Entry | null> {
     const row = await this.db
-      .prepare(`SELECT * FROM pluts_entries WHERE id = ?`)
-      .bind(id)
-      .first<EntryRow>();
+      .select(entrySelection)
+      .from(entries)
+      .innerJoin(entryKeys, eq(entryKeys.entryId, entries.id))
+      .where(eq(entryKeys.key, key))
+      .get();
     if (!row) return null;
     return this.loadEntry(row);
   }
 
   async allEntries(order: 'asc' | 'desc' = 'desc'): Promise<Entry[]> {
-    const dir = order === 'asc' ? 'ASC' : 'DESC';
-    const { results } = await this.db
-      .prepare(`SELECT * FROM pluts_entries ORDER BY date ${dir}`)
-      .all<EntryRow>();
-    return Promise.all(results.map((r) => this.loadEntry(r)));
+    const rows = await this.db
+      .select()
+      .from(entries)
+      .orderBy(order === 'asc' ? asc(entries.date) : desc(entries.date))
+      .all();
+    return Promise.all(rows.map((r) => this.loadEntry(r)));
   }
 
   async sumCredits(accountId: string, range?: DateRange): Promise<Amount> {
@@ -178,38 +204,36 @@ export class D1Repository implements Repository {
     return this.sumAmounts(accountId, 'debit', range);
   }
 
-  async sumByType(type: AccountType, kind: 'credit' | 'debit', range?: DateRange): Promise<Amount> {
-    const { clause, params } = dateRangeClause(range, 'e.');
-    const sql = `SELECT COALESCE(SUM(a.amount), 0) AS total
-      FROM pluts_amounts a
-      JOIN pluts_accounts acc ON acc.id = a.account_id
-      JOIN pluts_entries e ON e.id = a.entry_id
-      WHERE acc.type = ? AND a.type = ? ${clause}`;
+  async sumByType(type: AccountType, kind: AmountKind, range?: DateRange): Promise<Amount> {
     const r = await this.db
-      .prepare(sql)
-      .bind(type, kind, ...params)
-      .first<{ total: number }>();
-    return Amount.fromSigned(BigInt(r?.total ?? 0));
+      .select({ total: sql<number>`COALESCE(SUM(${amounts.amount}), 0)` })
+      .from(amounts)
+      .innerJoin(accounts, eq(accounts.id, amounts.accountId))
+      .innerJoin(entries, eq(entries.id, amounts.entryId))
+      .where(and(eq(accounts.type, type), eq(amounts.type, kind), dateRangeWhere(range)))
+      .get();
+    return Amount.fromMinor(BigInt(r?.total ?? 0));
   }
 
   async amountsForAccount(accountId: string): Promise<AmountRecord[]> {
-    const { results } = await this.db
-      .prepare(`SELECT a.* FROM pluts_amounts a WHERE a.account_id = ? ORDER BY a.entry_id`)
-      .bind(accountId)
-      .all<AmountRow>();
-    return this.hydrateAmounts(results);
+    const rows = await this.db
+      .select()
+      .from(amounts)
+      .where(eq(amounts.accountId, accountId))
+      .orderBy(asc(amounts.entryId))
+      .all();
+    return this.hydrateAmounts(rows);
   }
 
   async entriesForAccount(accountId: string): Promise<Entry[]> {
-    const { results } = await this.db
-      .prepare(
-        `SELECT DISTINCT e.* FROM pluts_entries e
-         JOIN pluts_amounts a ON a.entry_id = e.id
-         WHERE a.account_id = ? ORDER BY e.date DESC`,
-      )
-      .bind(accountId)
-      .all<EntryRow>();
-    return Promise.all(results.map((r) => this.loadEntry(r)));
+    const rows = await this.db
+      .selectDistinct(entrySelection)
+      .from(entries)
+      .innerJoin(amounts, eq(amounts.entryId, entries.id))
+      .where(eq(amounts.accountId, accountId))
+      .orderBy(desc(entries.date))
+      .all();
+    return Promise.all(rows.map((r) => this.loadEntry(r)));
   }
 
   private async sumAmounts(
@@ -217,64 +241,49 @@ export class D1Repository implements Repository {
     kind: AmountKind,
     range?: DateRange,
   ): Promise<Amount> {
-    const { clause, params } = dateRangeClause(range, 'e.');
-    const sql = `SELECT COALESCE(SUM(a.amount), 0) AS total
-      FROM pluts_amounts a
-      JOIN pluts_entries e ON e.id = a.entry_id
-      WHERE a.account_id = ? AND a.type = ? ${clause}`;
     const r = await this.db
-      .prepare(sql)
-      .bind(accountId, kind, ...params)
-      .first<{ total: number }>();
-    return Amount.fromSigned(BigInt(r?.total ?? 0));
+      .select({ total: sql<number>`COALESCE(SUM(${amounts.amount}), 0)` })
+      .from(amounts)
+      .innerJoin(entries, eq(entries.id, amounts.entryId))
+      .where(and(eq(amounts.accountId, accountId), eq(amounts.type, kind), dateRangeWhere(range)))
+      .get();
+    return Amount.fromMinor(BigInt(r?.total ?? 0));
   }
 
   /** Builds a fully-formed immutable Entry from a row, loading its amounts. */
   private async loadEntry(row: EntryRow): Promise<Entry> {
-    const { results } = await this.db
-      .prepare(`SELECT * FROM pluts_amounts WHERE entry_id = ?`)
-      .bind(row.id)
-      .all<AmountRow>();
-    const records = await this.hydrateAmounts(results);
+    const rows = await this.db.select().from(amounts).where(eq(amounts.entryId, row.id)).all();
+    const records = await this.hydrateAmounts(rows);
     const debits = records.filter((r) => r.kind === 'debit');
     const credits = records.filter((r) => r.kind === 'credit');
     const doc =
-      row.commercial_document_id && row.commercial_document_type
+      row.commercialDocumentId && row.commercialDocumentType
         ? ({
-            id: row.commercial_document_id,
-            type: row.commercial_document_type,
+            id: row.commercialDocumentId,
+            type: row.commercialDocumentType,
           } as CommercialDocumentRef)
         : null;
-    return new Entry(
-      row.id,
-      row.description,
-      row.date,
-      doc,
-      debits,
-      credits,
-      row.created_at,
-      row.updated_at,
-    );
+    return new Entry(row.id, row.description, row.date, doc, debits, credits, row.postedAt);
   }
 
   private async hydrateAmounts(rows: AmountRow[]): Promise<AmountRecord[]> {
     if (rows.length === 0) return [];
-    const accountIds = [...new Set(rows.map((r) => r.account_id))];
-    const placeholders = accountIds.map(() => '?').join(',');
-    const { results: accountRows } = await this.db
-      .prepare(`SELECT * FROM pluts_accounts WHERE id IN (${placeholders})`)
-      .bind(...accountIds)
-      .all<AccountRow>();
+    const accountIds = [...new Set(rows.map((r) => r.accountId))];
+    const accountRows = await this.db
+      .select()
+      .from(accounts)
+      .where(inArray(accounts.id, accountIds))
+      .all();
     const accountMap = new Map(accountRows.map((r) => [r.id, toAccount(r)]));
     return rows.map((r) => {
-      const account = accountMap.get(r.account_id);
-      if (!account) throw new Error(`Missing account ${r.account_id} for amount ${r.id}`);
+      const account = accountMap.get(r.accountId);
+      if (!account) throw new Error(`Missing account ${r.accountId} for amount ${r.id}`);
       return new AmountRecord(
         r.id,
         r.type as AmountKind,
         account,
-        Amount.fromSigned(BigInt(r.amount)),
-        r.entry_id,
+        Amount.fromMinor(BigInt(r.amount)),
+        r.entryId,
       );
     });
   }

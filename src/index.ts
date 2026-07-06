@@ -1,4 +1,4 @@
-export { Amount, SCALE } from './domain/amount.js';
+export { Amount, formatAmount, SCALE } from './domain/amount.js';
 export {
   Account,
   aggregateBalances,
@@ -16,7 +16,6 @@ export {
 export {
   Ledger,
   type BalanceSheet,
-  type CreateAccountInput,
   type IncomeStatement,
 } from './domain/ledger.js';
 export {
@@ -27,7 +26,7 @@ export {
   type DateRange,
   toDateISO,
 } from './domain/types.js';
-export { ValidationError, type ValidationIssue } from './domain/errors.js';
+export { RepositoryError, ValidationError, type ValidationIssue } from './domain/errors.js';
 export {
   amountSchema,
   createAccountSchema,
@@ -35,8 +34,13 @@ export {
   entryInputSchema,
   toIssues,
   type AmountInput,
+  type CreateAccountInput,
   type EntryInput,
 } from './domain/schemas.js';
 export type { Repository } from './db/repository.js';
 export { D1Repository } from './db/d1-repository.js';
 export { migrate } from './db/migrate.js';
+// Schema (DDL source of truth) + D1 driver for consumers wanting query-builder access.
+export { accounts, amounts, entries, entryKeys } from './db/schema.js';
+export { drizzle } from 'drizzle-orm/d1';
+export type { DrizzleD1Database } from 'drizzle-orm/d1';
