@@ -1,16 +1,16 @@
-import type { DurableObjectStorage } from '@cloudflare/workers-types';
-import { Account } from '../domain/account.js';
-import { Amount } from '../domain/amount.js';
+import type { DurableObjectStorage } from "@cloudflare/workers-types";
+import { Account } from "../domain/account";
+import { Amount } from "../domain/amount";
 import {
   type AmountKind,
   AmountRecord,
   Entry,
   type EntryPayload,
   amountsFromPayload,
-} from '../domain/entry.js';
-import { RepositoryError, ValidationError } from '../domain/errors.js';
-import { type AccountType, type DateRange, toDateISO } from '../domain/types.js';
-import type { Repository } from './repository.js';
+} from "../domain/entry";
+import { RepositoryError, ValidationError } from "../domain/errors";
+import { type AccountType, type DateRange, toDateISO } from "../domain/types";
+import type { Repository } from "./repository";
 
 /**
  * Raw row shapes (snake_case column names, as returned by SqlStorage cursors),
@@ -50,12 +50,20 @@ function uuid(): string {
  * error class, so this string-matches the message.
  */
 export function isUniqueConstraintError(e: unknown): boolean {
-  if (typeof e !== 'object' || e === null || !('message' in e)) return false;
-  return /UNIQUE constraint failed/i.test(String((e as { message: unknown }).message));
+  if (typeof e !== "object" || e === null || !("message" in e)) return false;
+  return /UNIQUE constraint failed/i.test(
+    String((e as { message: unknown }).message),
+  );
 }
 
 function toAccount(row: AccountRow): Account {
-  return new Account(row.id, row.name, row.type as AccountType, !!row.contra, row.created_at);
+  return new Account(
+    row.id,
+    row.name,
+    row.type as AccountType,
+    !!row.contra,
+    row.created_at,
+  );
 }
 
 /**
@@ -63,20 +71,23 @@ function toAccount(row: AccountRow): Account {
  * either the empty string (no range) or ` AND date >= ? AND date <= ?`; the
  * matching bound values are returned alongside for the exec bind list.
  */
-function dateRangeClause(range: DateRange | undefined): { sql: string; binds: string[] } {
-  if (!range) return { sql: '', binds: [] };
+function dateRangeClause(range: DateRange | undefined): {
+  sql: string;
+  binds: string[];
+} {
+  if (!range) return { sql: "", binds: [] };
   const clauses: string[] = [];
   const binds: string[] = [];
   if (range.fromDate) {
-    clauses.push('date >= ?');
+    clauses.push("date >= ?");
     binds.push(toDateISO(range.fromDate));
   }
   if (range.toDate) {
-    clauses.push('date <= ?');
+    clauses.push("date <= ?");
     binds.push(toDateISO(range.toDate));
   }
-  if (clauses.length === 0) return { sql: '', binds: [] };
-  return { sql: ` AND ${clauses.join(' AND ')}`, binds };
+  if (clauses.length === 0) return { sql: "", binds: [] };
+  return { sql: ` AND ${clauses.join(" AND ")}`, binds };
 }
 
 /**
@@ -120,7 +131,7 @@ export class SqlStorageRepository implements Repository {
     try {
       this.sql
         .exec(
-          'INSERT INTO pluts_accounts (id, name, type, contra, created_at) VALUES (?, ?, ?, ?, ?)',
+          "INSERT INTO pluts_accounts (id, name, type, contra, created_at) VALUES (?, ?, ?, ?, ?)",
           id,
           input.name,
           input.type,
@@ -131,8 +142,8 @@ export class SqlStorageRepository implements Repository {
     } catch (e) {
       if (isUniqueConstraintError(e)) {
         throw new ValidationError(
-          [{ path: ['name'], message: 'has already been taken' }],
-          'Account already exists',
+          [{ path: ["name"], message: "has already been taken" }],
+          "Account already exists",
         );
       }
       throw e;
@@ -143,7 +154,7 @@ export class SqlStorageRepository implements Repository {
   async getAccount(id: string): Promise<Account | null> {
     const rows = this.sql
       .exec<AccountRow>(
-        'SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE id = ?',
+        "SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE id = ?",
         id,
       )
       .toArray();
@@ -154,7 +165,7 @@ export class SqlStorageRepository implements Repository {
   async getAccountByName(name: string): Promise<Account | null> {
     const rows = this.sql
       .exec<AccountRow>(
-        'SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE name = ?',
+        "SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE name = ?",
         name,
       )
       .toArray();
@@ -165,7 +176,7 @@ export class SqlStorageRepository implements Repository {
   async getAccountsByType(type: AccountType): Promise<Account[]> {
     return this.sql
       .exec<AccountRow>(
-        'SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE type = ? ORDER BY name ASC',
+        "SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE type = ? ORDER BY name ASC",
         type,
       )
       .toArray()
@@ -175,7 +186,7 @@ export class SqlStorageRepository implements Repository {
   async allAccounts(): Promise<Account[]> {
     return this.sql
       .exec<AccountRow>(
-        'SELECT id, name, type, contra, created_at FROM pluts_accounts ORDER BY name ASC',
+        "SELECT id, name, type, contra, created_at FROM pluts_accounts ORDER BY name ASC",
       )
       .toArray()
       .map(toAccount);
@@ -193,7 +204,7 @@ export class SqlStorageRepository implements Repository {
       this.storage.transactionSync(() => {
         this.sql
           .exec(
-            'INSERT INTO pluts_entries (id, description, date, posted_at) VALUES (?, ?, ?, ?)',
+            "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES (?, ?, ?, ?)",
             id,
             payload.description,
             payload.date,
@@ -204,7 +215,7 @@ export class SqlStorageRepository implements Repository {
         for (const a of [...debits, ...credits]) {
           this.sql
             .exec(
-              'INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES (?, ?, ?, ?, ?)',
+              "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES (?, ?, ?, ?, ?)",
               a.id,
               a.kind,
               a.account.id,
@@ -217,7 +228,7 @@ export class SqlStorageRepository implements Repository {
         if (payload.idempotencyKey) {
           this.sql
             .exec(
-              'INSERT INTO pluts_entry_keys (key, entry_id) VALUES (?, ?)',
+              "INSERT INTO pluts_entry_keys (key, entry_id) VALUES (?, ?)",
               payload.idempotencyKey,
               id,
             )
@@ -233,15 +244,25 @@ export class SqlStorageRepository implements Repository {
         const existing = await this.getEntryByKey(payload.idempotencyKey);
         if (existing) return existing;
       }
-      throw new RepositoryError('Failed to persist entry', e);
+      throw new RepositoryError("Failed to persist entry", e);
     }
 
-    return new Entry(id, payload.description, payload.date, debits, credits, now);
+    return new Entry(
+      id,
+      payload.description,
+      payload.date,
+      debits,
+      credits,
+      now,
+    );
   }
 
   async getEntry(id: string): Promise<Entry | null> {
     const rows = this.sql
-      .exec<EntryRow>('SELECT id, description, date, posted_at FROM pluts_entries WHERE id = ?', id)
+      .exec<EntryRow>(
+        "SELECT id, description, date, posted_at FROM pluts_entries WHERE id = ?",
+        id,
+      )
       .toArray();
     const row = rows[0];
     return row ? this.loadEntry(row) : null;
@@ -261,8 +282,8 @@ export class SqlStorageRepository implements Repository {
     return row ? this.loadEntry(row) : null;
   }
 
-  async allEntries(order: 'asc' | 'desc' = 'desc'): Promise<Entry[]> {
-    const dir = order === 'asc' ? 'ASC' : 'DESC';
+  async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
+    const dir = order === "asc" ? "ASC" : "DESC";
     const rows = this.sql
       .exec<EntryRow>(
         `SELECT id, description, date, posted_at FROM pluts_entries ORDER BY date ${dir}`,
@@ -274,14 +295,18 @@ export class SqlStorageRepository implements Repository {
   }
 
   async sumCredits(accountId: string, range?: DateRange): Promise<Amount> {
-    return this.sumAmounts(accountId, 'credit', range);
+    return this.sumAmounts(accountId, "credit", range);
   }
 
   async sumDebits(accountId: string, range?: DateRange): Promise<Amount> {
-    return this.sumAmounts(accountId, 'debit', range);
+    return this.sumAmounts(accountId, "debit", range);
   }
 
-  async sumByType(type: AccountType, kind: AmountKind, range?: DateRange): Promise<Amount> {
+  async sumByType(
+    type: AccountType,
+    kind: AmountKind,
+    range?: DateRange,
+  ): Promise<Amount> {
     const rangeClause = dateRangeClause(range);
     // An aggregate SELECT always returns exactly one row, so .one() is safe.
     const row = this.sql
@@ -302,7 +327,7 @@ export class SqlStorageRepository implements Repository {
   async amountsForAccount(accountId: string): Promise<AmountRecord[]> {
     const rows = this.sql
       .exec<AmountRow>(
-        'SELECT id, type, account_id, entry_id, amount FROM pluts_amounts WHERE account_id = ? ORDER BY entry_id ASC',
+        "SELECT id, type, account_id, entry_id, amount FROM pluts_amounts WHERE account_id = ? ORDER BY entry_id ASC",
         accountId,
       )
       .toArray();
@@ -347,14 +372,21 @@ export class SqlStorageRepository implements Repository {
   private loadEntry(row: EntryRow): Entry {
     const amounts = this.sql
       .exec<AmountRow>(
-        'SELECT id, type, account_id, entry_id, amount FROM pluts_amounts WHERE entry_id = ?',
+        "SELECT id, type, account_id, entry_id, amount FROM pluts_amounts WHERE entry_id = ?",
         row.id,
       )
       .toArray();
     const records = this.hydrateAmounts(amounts);
-    const debits = records.filter((r) => r.kind === 'debit');
-    const credits = records.filter((r) => r.kind === 'credit');
-    return new Entry(row.id, row.description, row.date, debits, credits, row.posted_at);
+    const debits = records.filter((r) => r.kind === "debit");
+    const credits = records.filter((r) => r.kind === "credit");
+    return new Entry(
+      row.id,
+      row.description,
+      row.date,
+      debits,
+      credits,
+      row.posted_at,
+    );
   }
 
   private hydrateAmounts(rows: AmountRow[]): AmountRecord[] {
@@ -363,7 +395,7 @@ export class SqlStorageRepository implements Repository {
     // SqlStorage.exec takes a fixed number of placeholders; build a single
     // IN (...) query with one ? per id. No await between the exec and the
     // .toArray() consumption, so the cursor is safe.
-    const placeholders = accountIds.map(() => '?').join(', ');
+    const placeholders = accountIds.map(() => "?").join(", ");
     const accountRows = this.sql
       .exec<AccountRow>(
         `SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE id IN (${placeholders})`,
@@ -373,7 +405,8 @@ export class SqlStorageRepository implements Repository {
     const accountMap = new Map(accountRows.map((r) => [r.id, toAccount(r)]));
     return rows.map((r) => {
       const account = accountMap.get(r.account_id);
-      if (!account) throw new Error(`Missing account ${r.account_id} for amount ${r.id}`);
+      if (!account)
+        throw new Error(`Missing account ${r.account_id} for amount ${r.id}`);
       return new AmountRecord(
         r.id,
         r.type as AmountKind,

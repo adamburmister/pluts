@@ -1,14 +1,18 @@
-import type { Repository } from '../../src/db/repository.js';
-import { Account } from '../../src/domain/account.js';
-import { Amount } from '../../src/domain/amount.js';
+import type { Repository } from "../../src/db/repository";
+import { Account } from "../../src/domain/account";
+import { Amount } from "../../src/domain/amount";
 import {
   AmountRecord,
   Entry,
   type EntryPayload,
   amountsFromPayload,
-} from '../../src/domain/entry.js';
-import { ValidationError } from '../../src/domain/errors.js';
-import { type AccountType, type DateRange, toDateISO } from '../../src/domain/types.js';
+} from "../../src/domain/entry";
+import { ValidationError } from "../../src/domain/errors";
+import {
+  type AccountType,
+  type DateRange,
+  toDateISO,
+} from "../../src/domain/types";
 
 interface MemAccount {
   id: string;
@@ -54,8 +58,8 @@ export class InMemoryRepository implements Repository {
     const key = `${input.name}\0${input.type}`;
     if (this.nameIndex.has(key)) {
       throw new ValidationError(
-        [{ path: ['name'], message: 'has already been taken' }],
-        'Account already exists',
+        [{ path: ["name"], message: "has already been taken" }],
+        "Account already exists",
       );
     }
     const id = uuid();
@@ -89,7 +93,9 @@ export class InMemoryRepository implements Repository {
   }
 
   async getAccountsByType(type: AccountType): Promise<Account[]> {
-    return [...this.accounts.values()].filter((a) => a.type === type).map(this.toAccount);
+    return [...this.accounts.values()]
+      .filter((a) => a.type === type)
+      .map(this.toAccount);
   }
 
   async allAccounts(): Promise<Account[]> {
@@ -137,10 +143,12 @@ export class InMemoryRepository implements Repository {
     return mem ? this.toEntry(mem) : null;
   }
 
-  async allEntries(order: 'asc' | 'desc' = 'desc'): Promise<Entry[]> {
+  async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
     const list = [...this.entries.values()];
     list.sort((a, b) =>
-      order === 'asc' ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date),
+      order === "asc"
+        ? a.date.localeCompare(b.date)
+        : b.date.localeCompare(a.date),
     );
     return list.map((m) => this.toEntry(m));
   }
@@ -157,11 +165,15 @@ export class InMemoryRepository implements Repository {
     return this.sum(rec.debits, range);
   }
 
-  async sumByType(type: AccountType, kind: 'credit' | 'debit', range?: DateRange): Promise<Amount> {
+  async sumByType(
+    type: AccountType,
+    kind: "credit" | "debit",
+    range?: DateRange,
+  ): Promise<Amount> {
     let total = 0n;
     for (const rec of this.accounts.values()) {
       if (rec.type !== type) continue;
-      const list = kind === 'credit' ? rec.credits : rec.debits;
+      const list = kind === "credit" ? rec.credits : rec.debits;
       total += this.sum(list, range).minor;
     }
     return Amount.fromMinor(total);
@@ -173,11 +185,17 @@ export class InMemoryRepository implements Repository {
     const out: AmountRecord[] = [];
     for (const c of rec.credits) {
       const entry = this.entries.get(c.entryId);
-      if (entry) out.push(...entry.creditAmounts.filter((a) => a.account.id === accountId));
+      if (entry)
+        out.push(
+          ...entry.creditAmounts.filter((a) => a.account.id === accountId),
+        );
     }
     for (const d of rec.debits) {
       const entry = this.entries.get(d.entryId);
-      if (entry) out.push(...entry.debitAmounts.filter((a) => a.account.id === accountId));
+      if (entry)
+        out.push(
+          ...entry.debitAmounts.filter((a) => a.account.id === accountId),
+        );
     }
     return out;
   }
@@ -195,7 +213,10 @@ export class InMemoryRepository implements Repository {
       .map((m) => this.toEntry(m));
   }
 
-  private sum(list: { amount: Amount; entryId: string }[], range?: DateRange): Amount {
+  private sum(
+    list: { amount: Amount; entryId: string }[],
+    range?: DateRange,
+  ): Amount {
     let total = 0n;
     for (const item of list) {
       const entry = this.entries.get(item.entryId);

@@ -1,8 +1,8 @@
-import { z } from 'zod';
-import { Account } from './account.js';
-import { Amount } from './amount.js';
-import type { ValidationIssue } from './errors.js';
-import { AccountType, toDateISO } from './types.js';
+import { z } from "zod";
+import { Account } from "./account";
+import { Amount } from "./amount";
+import type { ValidationIssue } from "./errors";
+import { AccountType, toDateISO } from "./types";
 
 /**
  * Amount input: accepts an already-built {@link Amount}, a non-negative finite
@@ -18,7 +18,7 @@ import { AccountType, toDateISO } from './types.js';
  */
 export const amountSchema = z
   .union([
-    z.custom<Amount>((v) => v instanceof Amount, { message: 'Invalid Amount' }),
+    z.custom<Amount>((v) => v instanceof Amount, { message: "Invalid Amount" }),
     z.number().finite().nonnegative(),
     z.string().regex(/^\d+(\.\d+)?$/),
   ])
@@ -53,7 +53,7 @@ const amountLineSchema = z
   })
   .refine((v) => v.account || v.accountName, {
     message: "can't be blank",
-    path: ['account'],
+    path: ["account"],
   });
 
 export type AmountLine = z.output<typeof amountLineSchema>;
@@ -71,25 +71,25 @@ export const entryInputSchema = z
   .superRefine((v, ctx) => {
     if (v.debits.length === 0) {
       ctx.addIssue({
-        code: 'custom',
-        path: ['debits'],
-        message: 'Entry must have at least one debit amount',
+        code: "custom",
+        path: ["debits"],
+        message: "Entry must have at least one debit amount",
       });
     }
     if (v.credits.length === 0) {
       ctx.addIssue({
-        code: 'custom',
-        path: ['credits'],
-        message: 'Entry must have at least one credit amount',
+        code: "custom",
+        path: ["credits"],
+        message: "Entry must have at least one credit amount",
       });
     }
     const debitSum = v.debits.reduce((acc, l) => acc + l.amount.minor, 0n);
     const creditSum = v.credits.reduce((acc, l) => acc + l.amount.minor, 0n);
     if (debitSum !== creditSum) {
       ctx.addIssue({
-        code: 'custom',
+        code: "custom",
         path: [],
-        message: 'The credit and debit amounts are not equal',
+        message: "The credit and debit amounts are not equal",
       });
     }
   });

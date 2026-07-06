@@ -1,7 +1,7 @@
-import type { Account } from '../domain/account.js';
-import type { Amount } from '../domain/amount.js';
-import type { AmountRecord, Entry, EntryPayload } from '../domain/entry.js';
-import type { AccountType, DateRange } from '../domain/types.js';
+import type { Account } from "../domain/account";
+import type { Amount } from "../domain/amount";
+import type { AmountRecord, Entry, EntryPayload } from "../domain/entry";
+import type { AccountType, DateRange } from "../domain/types";
 
 export interface Repository {
   insertAccount(input: {
@@ -21,7 +21,7 @@ export interface Repository {
   getEntry(id: string): Promise<Entry | null>;
   /** Look up an entry by its client-supplied idempotency key, or null if none. */
   getEntryByKey(key: string): Promise<Entry | null>;
-  allEntries(order?: 'asc' | 'desc'): Promise<Entry[]>;
+  allEntries(order?: "asc" | "desc"): Promise<Entry[]>;
 
   /** Sum of credit amounts for an account, optionally within a date range. */
   sumCredits(accountId: string, range?: DateRange): Promise<Amount>;
@@ -29,7 +29,11 @@ export interface Repository {
   sumDebits(accountId: string, range?: DateRange): Promise<Amount>;
 
   /** Sum of amounts of a given kind across all accounts of a type, optionally within a date range. */
-  sumByType(type: AccountType, kind: 'credit' | 'debit', range?: DateRange): Promise<Amount>;
+  sumByType(
+    type: AccountType,
+    kind: "credit" | "debit",
+    range?: DateRange,
+  ): Promise<Amount>;
 
   /** All amounts (credit + debit) for an account, with their entries. */
   amountsForAccount(accountId: string): Promise<AmountRecord[]>;

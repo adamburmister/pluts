@@ -1,10 +1,15 @@
-import { type Account } from './account.js';
-import { Amount } from './amount.js';
-import { ValidationError, type ValidationIssue } from './errors.js';
-import { type AmountLine, type EntryInput, entryInputSchema, toIssues } from './schemas.js';
-import { toDateISO } from './types.js';
+import { type Account } from "./account.js";
+import { Amount } from "./amount.js";
+import { ValidationError, type ValidationIssue } from "./errors.js";
+import {
+  type AmountLine,
+  type EntryInput,
+  entryInputSchema,
+  toIssues,
+} from "./schemas.js";
+import { toDateISO } from "./types.js";
 
-export type AmountKind = 'credit' | 'debit';
+export type AmountKind = "credit" | "debit";
 
 /** A debit/credit line with a resolved account (no name lookup pending). */
 export interface ResolvedAmountLine {
@@ -37,6 +42,16 @@ export class AmountRecord {
     readonly amount: Amount,
     readonly entryId: string,
   ) {}
+
+  toJSON(): string {
+    return JSON.stringify({
+      id: this.id,
+      kind: this.kind,
+      accountId: this.account.id,
+      amount: this.amount.toMajor(),
+      entryId: this.entryId,
+    });
+  }
 }
 
 /**
@@ -55,6 +70,23 @@ export class Entry {
     readonly creditAmounts: readonly AmountRecord[],
     readonly postedAt: string,
   ) {}
+
+  toJSON(): string {
+    return JSON.stringify({
+      id: this.id,
+      description: this.description,
+      date: this.date,
+      debitAmounts: this.debitAmounts.map((d) => ({
+        ...d,
+        amount: d.amount.toMajor(),
+      })),
+      creditAmounts: this.creditAmounts.map((c) => ({
+        ...c,
+        amount: c.amount.toMajor(),
+      })),
+      postedAt: this.postedAt,
+    });
+  }
 }
 
 function newId(): string {
@@ -93,7 +125,7 @@ export function buildEntry(
   const resolveLine = (
     line: AmountLine,
     index: number,
-    root: 'debits' | 'credits',
+    root: "debits" | "credits",
   ): ResolvedAmountLine | null => {
     if (line.account) return { account: line.account, amount: line.amount };
     const name = line.accountName;
@@ -101,7 +133,7 @@ export function buildEntry(
       const found = resolveAccount(name);
       if (found) return { account: found, amount: line.amount };
       issues.push({
-        path: [root, index, 'account'],
+        path: [root, index, "account"],
         message: `Account "${name}" not found`,
       });
     }
@@ -111,11 +143,11 @@ export function buildEntry(
   const resolvedDebits: ResolvedAmountLine[] = [];
   const resolvedCredits: ResolvedAmountLine[] = [];
   debits.forEach((l, i) => {
-    const r = resolveLine(l, i, 'debits');
+    const r = resolveLine(l, i, "debits");
     if (r) resolvedDebits.push(r);
   });
   credits.forEach((l, i) => {
-    const r = resolveLine(l, i, 'credits');
+    const r = resolveLine(l, i, "credits");
     if (r) resolvedCredits.push(r);
   });
 
@@ -140,10 +172,10 @@ export function amountsFromPayload(
 ): { debits: AmountRecord[]; credits: AmountRecord[] } {
   return {
     debits: payload.debits.map(
-      (l) => new AmountRecord(newId(), 'debit', l.account, l.amount, entryId),
+      (l) => new AmountRecord(newId(), "debit", l.account, l.amount, entryId),
     ),
     credits: payload.credits.map(
-      (l) => new AmountRecord(newId(), 'credit', l.account, l.amount, entryId),
+      (l) => new AmountRecord(newId(), "credit", l.account, l.amount, entryId),
     ),
   };
 }

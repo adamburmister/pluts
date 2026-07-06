@@ -1,10 +1,10 @@
 /** The five account types, mirroring Plutus' single-table-inheritance subclasses. */
 export enum AccountType {
-  Asset = 'Asset',
-  Liability = 'Liability',
-  Equity = 'Equity',
-  Revenue = 'Revenue',
-  Expense = 'Expense',
+  Asset = "Asset",
+  Liability = "Liability",
+  Equity = "Equity",
+  Revenue = "Revenue",
+  Expense = "Expense",
 }
 
 export const ACCOUNT_TYPES: readonly AccountType[] = [
@@ -21,7 +21,9 @@ export const ACCOUNT_TYPES: readonly AccountType[] = [
  */
 export function normalCreditBalance(type: AccountType): boolean {
   return (
-    type === AccountType.Liability || type === AccountType.Equity || type === AccountType.Revenue
+    type === AccountType.Liability ||
+    type === AccountType.Equity ||
+    type === AccountType.Revenue
   );
 }
 
@@ -33,11 +35,11 @@ export interface DateRange {
 
 /** Normalizes a Date | string to an ISO yyyy-mm-dd string. */
 export function toDateISO(d: Date | string): string {
-  if (typeof d === 'string') {
+  if (typeof d === "string") {
     return d;
   }
   const year = d.getUTCFullYear();
-  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
+  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }

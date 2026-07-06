@@ -1,5 +1,5 @@
-import { Amount } from './amount.js';
-import { type AccountType, normalCreditBalance } from './types.js';
+import { Amount } from "./amount";
+import { type AccountType, normalCreditBalance } from "./types";
 
 /** A persisted account record. The `type` discriminates the accounting behaviour. */
 export class Account {
@@ -45,7 +45,11 @@ export function computeBalance(
  * Balances are signed `bigint`; the result is signed `bigint`.
  */
 export function aggregateBalances(
-  accounts: ReadonlyArray<{ type: AccountType; contra: boolean; balance: bigint }>,
+  accounts: ReadonlyArray<{
+    type: AccountType;
+    contra: boolean;
+    balance: bigint;
+  }>,
   type: AccountType,
 ): bigint {
   let total = 0n;

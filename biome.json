@@ -1,39 +1,34 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.0/schema.json",
-  "organizeImports": { "enabled": true },
-  "linter": {
+  "$schema": "https://biomejs.dev/schemas/2.5.2/schema.json",
+  "vcs": {
     "enabled": true,
-    "rules": {
-      "recommended": true,
-      "style": {
-        "useImportType": "off",
-        "useNodejsImportProtocol": "off",
-        "noNonNullAssertion": "off",
-        "noUnusedTemplateLiteral": "off"
-      },
-      "suspicious": {
-        "noExplicitAny": "off"
-      },
-      "correctness": {
-        "noUnusedVariables": "warn",
-        "noUnusedImports": "warn"
-      }
-    }
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": false
   },
   "formatter": {
     "enabled": true,
-    "indentStyle": "space",
-    "indentWidth": 2,
-    "lineWidth": 100
+    "indentStyle": "space"
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
   },
   "javascript": {
     "formatter": {
-      "quoteStyle": "single",
-      "trailingCommas": "all",
-      "semicolons": "always"
+      "quoteStyle": "double"
     }
   },
-  "files": {
-    "ignore": ["ruby", "node_modules", ".wrangler"]
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
   }
 }

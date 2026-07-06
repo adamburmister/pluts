@@ -29,7 +29,8 @@ export class Amount {
   private constructor(readonly minor: bigint) {}
 
   static fromMinor(minor: bigint): Amount {
-    if (minor < 0n) throw new RangeError('Amount minor units must be non-negative');
+    if (minor < 0n)
+      throw new RangeError("Amount minor units must be non-negative");
     return new Amount(minor);
   }
 
@@ -38,9 +39,10 @@ export class Amount {
    * Half-up rounding to the nearest minor unit, via exact bigint arithmetic.
    */
   static fromMajor(value: number | string): Amount {
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) throw new RangeError('Amount must be finite');
-      if (value < 0) throw new RangeError('Amount must be non-negative');
+    if (typeof value === "number") {
+      if (!Number.isFinite(value))
+        throw new RangeError("Amount must be finite");
+      if (value < 0) throw new RangeError("Amount must be non-negative");
       // Stringify preserving significant fractional digits, then parse exactly.
       return Amount.fromString(value.toString());
     }
@@ -56,19 +58,19 @@ export class Amount {
     if (!/^\d+(\.\d+)?$/.test(trimmed)) {
       throw new RangeError(`Invalid amount string: ${s}`);
     }
-    const [wholeStr, fracRaw = ''] = trimmed.split('.');
-    const whole = wholeStr ?? '0';
-    const frac = fracRaw ?? '';
+    const [wholeStr, fracRaw = ""] = trimmed.split(".");
+    const whole = wholeStr ?? "0";
+    const frac = fracRaw ?? "";
 
     let minor: bigint;
     if (frac.length <= SCALE) {
-      const fracPadded = (frac + '0'.repeat(SCALE)).slice(0, SCALE);
-      minor = BigInt(whole) * FACTOR + BigInt(fracPadded || '0');
+      const fracPadded = (frac + "0".repeat(SCALE)).slice(0, SCALE);
+      minor = BigInt(whole) * FACTOR + BigInt(fracPadded || "0");
     } else {
       // Half-up round the excess fractional digits.
       const keep = frac.slice(0, SCALE);
       const nextDigit = frac.slice(SCALE, SCALE + 1);
-      const base = BigInt(whole) * FACTOR + BigInt(keep || '0');
+      const base = BigInt(whole) * FACTOR + BigInt(keep || "0");
       minor = BigInt(nextDigit) >= 5n ? base + 1n : base;
     }
     return new Amount(minor);
@@ -80,14 +82,15 @@ export class Amount {
 
   sub(other: Amount): Amount {
     const result = this.minor - other.minor;
-    if (result < 0n) throw new RangeError('Amount subtraction would be negative');
+    if (result < 0n)
+      throw new RangeError("Amount subtraction would be negative");
     return new Amount(result);
   }
 
   /** Multiply by a non-negative integer scalar. */
   mul(scalar: number | bigint): Amount {
-    const s = typeof scalar === 'number' ? BigInt(scalar) : scalar;
-    if (s < 0n) throw new RangeError('Amount scalar must be non-negative');
+    const s = typeof scalar === "number" ? BigInt(scalar) : scalar;
+    if (s < 0n) throw new RangeError("Amount scalar must be non-negative");
     return new Amount(this.minor * s);
   }
 
@@ -123,7 +126,7 @@ export class Amount {
   toMajor(): string {
     const whole = this.minor / FACTOR;
     const frac = this.minor % FACTOR;
-    return `${whole}.${frac.toString().padStart(SCALE, '0')}`;
+    return `${whole}.${frac.toString().padStart(SCALE, "0")}`;
   }
 
   toJSON(): string {
@@ -142,9 +145,9 @@ export class Amount {
  * the strictly-non-negative {@link Amount}.
  */
 export function formatAmount(minor: bigint): string {
-  const sign = minor < 0n ? '-' : '';
+  const sign = minor < 0n ? "-" : "";
   const abs = minor < 0n ? -minor : minor;
   const whole = abs / FACTOR;
   const frac = abs % FACTOR;
-  return `${sign}${whole}.${frac.toString().padStart(SCALE, '0')}`;
+  return `${sign}${whole}.${frac.toString().padStart(SCALE, "0")}`;
 }

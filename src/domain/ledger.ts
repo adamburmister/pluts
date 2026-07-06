@@ -1,14 +1,19 @@
-import type { Repository } from '../db/repository.js';
-import { type Account, aggregateBalances, computeBalance } from './account.js';
-import { type AmountRecord, type Entry, type EntryPayload, buildEntry } from './entry.js';
-import { ValidationError } from './errors.js';
+import type { Repository } from "../db/repository";
+import { type Account, aggregateBalances, computeBalance } from "./account";
+import {
+  type AmountRecord,
+  type Entry,
+  type EntryPayload,
+  buildEntry,
+} from "./entry";
+import { ValidationError } from "./errors";
 import {
   type CreateAccountInput,
   type EntryInput,
   createAccountSchema,
   toIssues,
-} from './schemas.js';
-import { AccountType, type DateRange } from './types.js';
+} from "./schemas";
+import { AccountType, type DateRange } from "./types";
 
 /**
  * Balances are signed `bigint` minor units. A balance may legitimately be
@@ -41,7 +46,10 @@ export class Ledger {
   async createAccount(input: CreateAccountInput): Promise<Account> {
     const parsed = createAccountSchema.safeParse(input);
     if (!parsed.success) {
-      throw new ValidationError(toIssues(parsed.error.issues), 'Invalid account input');
+      throw new ValidationError(
+        toIssues(parsed.error.issues),
+        "Invalid account input",
+      );
     }
     // The DB unique index (name, type) is the source of truth; insertAccount
     // catches the constraint violation and re-throws as ValidationError. This
@@ -75,7 +83,10 @@ export class Ledger {
       if (acc) accountMap.set(name, acc);
     }
 
-    const payload: EntryPayload = buildEntry(input, (name) => accountMap.get(name) ?? null);
+    const payload: EntryPayload = buildEntry(
+      input,
+      (name) => accountMap.get(name) ?? null,
+    );
     return this.repo.insertEntry(payload);
   }
 
@@ -171,7 +182,7 @@ export class Ledger {
     return this.repo.amountsForAccount(account.id);
   }
 
-  async allEntries(order: 'asc' | 'desc' = 'desc'): Promise<Entry[]> {
+  async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
     return this.repo.allEntries(order);
   }
 }

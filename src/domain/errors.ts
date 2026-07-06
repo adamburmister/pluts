@@ -18,9 +18,9 @@ export interface ValidationIssue {
 export class ValidationError extends Error {
   readonly issues: ValidationIssue[];
 
-  constructor(issues: ValidationIssue[], message = 'Validation failed') {
+  constructor(issues: ValidationIssue[], message = "Validation failed") {
     super(message);
-    this.name = 'ValidationError';
+    this.name = "ValidationError";
     this.issues = issues;
   }
 
@@ -35,7 +35,7 @@ export class ValidationError extends Error {
   errorsByField(): Record<string, string[]> {
     const out: Record<string, string[]> = {};
     for (const issue of this.issues) {
-      const key = issue.path.length === 0 ? '_base' : String(issue.path[0]);
+      const key = issue.path.length === 0 ? "_base" : String(issue.path[0]);
       const list = out[key];
       if (list) {
         list.push(issue.message);
@@ -56,6 +56,6 @@ export class ValidationError extends Error {
 export class RepositoryError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message, { cause });
-    this.name = 'RepositoryError';
+    this.name = "RepositoryError";
   }
 }
