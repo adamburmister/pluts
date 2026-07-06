@@ -1,83 +1,84 @@
-import { sql } from 'drizzle-orm';
-import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import type { SqlStorage } from '@cloudflare/workers-types';
 
 /**
- * Pluts D1 schema — the single source of truth for DDL. `db:generate` (via
- * drizzle-kit) turns these table objects into versioned SQL migrations under
- * `./drizzle/`, which are embedded into `src/db/migrations.ts` for the runtime
- * migrator (see `src/db/migrate.ts`).
+ * Pluts schema — the single source of truth for DDL, applied to a
+ * SQLite-backed Durable Object's own storage (`ctx.storage.sql`).
  *
- * Consumers infer row types via `typeof accounts.$inferSelect` etc. — there are
- * no hand-written row interfaces here.
- *
- * Precision note: D1 returns INTEGER as a JS number. `amount` (minor units) is
- * exact up to Number.MAX_SAFE_INTEGER (~$90T at scale 2), an accepted ceiling
- * for a personal-finance ledger. The write path binds `minor.toString()`.
+ * Precision note: `SqlStorage` returns INTEGER as a JS number. `amount` (minor
+ * units) is exact up to Number.MAX_SAFE_INTEGER (~$90T at scale 2), an accepted
+ * ceiling for a personal-finance ledger. The write path binds
+ * `Number(amount.minor)`.
  */
 
-export const accounts = sqliteTable(
-  'pluts_accounts',
-  {
-    id: text('id').primaryKey(),
-    name: text('name').notNull(),
-    type: text('type').notNull(),
-    contra: integer('contra', { mode: 'boolean' }).notNull().default(false),
-    createdAt: text('created_at').notNull(),
-  },
-  (t) => [
-    check(
-      'pluts_accounts_type_check',
-      sql`${t.type} IN ('Asset','Liability','Equity','Revenue','Expense')`,
-    ),
-    uniqueIndex('pluts_accounts_name_type_idx').on(t.name, t.type),
-    index('pluts_accounts_type_idx').on(t.type, t.name),
-  ],
-);
-
-export const entries = sqliteTable(
-  'pluts_entries',
-  {
-    id: text('id').primaryKey(),
-    description: text('description').notNull(),
-    date: text('date').notNull(),
-    commercialDocumentId: text('commercial_document_id'),
-    commercialDocumentType: text('commercial_document_type'),
-    postedAt: text('posted_at').notNull(),
-  },
-  (t) => [
-    index('pluts_entries_date_idx').on(t.date),
-    index('pluts_entries_commercial_doc_idx').on(t.commercialDocumentId, t.commercialDocumentType),
-  ],
-);
-
-export const amounts = sqliteTable(
-  'pluts_amounts',
-  {
-    id: text('id').primaryKey(),
-    type: text('type').notNull(),
-    accountId: text('account_id')
-      .notNull()
-      .references(() => accounts.id),
-    entryId: text('entry_id')
-      .notNull()
-      .references(() => entries.id),
-    amount: integer('amount').notNull(),
-  },
-  (t) => [
-    index('pluts_amounts_type_idx').on(t.type),
-    index('pluts_amounts_account_entry_idx').on(t.accountId, t.entryId),
-    index('pluts_amounts_entry_account_idx').on(t.entryId, t.accountId),
-  ],
-);
+export const SCHEMA_STATEMENTS: string[] = [
+  `CREATE TABLE IF NOT EXISTS pluts_accounts (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  contra INTEGER DEFAULT 0 NOT NULL,
+  created_at TEXT NOT NULL,
+  CONSTRAINT pluts_accounts_type_check CHECK (type IN ('Asset','Liability','Equity','Revenue','Expense'))
+)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS pluts_accounts_name_type_idx ON pluts_accounts (name, type)`,
+  `CREATE INDEX IF NOT EXISTS pluts_accounts_type_idx ON pluts_accounts (type, name)`,
+  `CREATE TABLE IF NOT EXISTS pluts_entries (
+  id TEXT PRIMARY KEY NOT NULL,
+  description TEXT NOT NULL,
+  date TEXT NOT NULL,
+  commercial_document_id TEXT,
+  commercial_document_type TEXT,
+  posted_at TEXT NOT NULL
+)`,
+  `CREATE INDEX IF NOT EXISTS pluts_entries_date_idx ON pluts_entries (date)`,
+  `CREATE INDEX IF NOT EXISTS pluts_entries_commercial_doc_idx ON pluts_entries (commercial_document_id, commercial_document_type)`,
+  `CREATE TABLE IF NOT EXISTS pluts_amounts (
+  id TEXT PRIMARY KEY NOT NULL,
+  type TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  entry_id TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  FOREIGN KEY (account_id) REFERENCES pluts_accounts(id) ON UPDATE no action ON DELETE no action,
+  FOREIGN KEY (entry_id) REFERENCES pluts_entries(id) ON UPDATE no action ON DELETE no action
+)`,
+  `CREATE INDEX IF NOT EXISTS pluts_amounts_type_idx ON pluts_amounts (type)`,
+  `CREATE INDEX IF NOT EXISTS pluts_amounts_account_entry_idx ON pluts_amounts (account_id, entry_id)`,
+  `CREATE INDEX IF NOT EXISTS pluts_amounts_entry_account_idx ON pluts_amounts (entry_id, account_id)`,
+  `CREATE TABLE IF NOT EXISTS pluts_entry_keys (
+  key TEXT PRIMARY KEY NOT NULL,
+  entry_id TEXT NOT NULL,
+  FOREIGN KEY (entry_id) REFERENCES pluts_entries(id) ON UPDATE no action ON DELETE no action
+)`,
+];
 
 /**
- * Idempotency keys: a client-supplied dedup key maps to exactly one entry, so
- * retries (e.g. after a Durable Object eviction) return the previously-persisted
- * entry instead of posting a duplicate.
+ * The full Pluts schema as a single SQL string (statements joined with `;\n`),
+ * for inspection or for runtimes whose `exec` splits on `;`. To apply it to a
+ * Durable Object's storage, prefer {@link migrateSql}, which runs each
+ * statement individually via `SqlStorage.exec` (robust across runtimes).
  */
-export const entryKeys = sqliteTable('pluts_entry_keys', {
-  key: text('key').primaryKey(),
-  entryId: text('entry_id')
-    .notNull()
-    .references(() => entries.id),
-});
+export const SCHEMA_SQL: string = SCHEMA_STATEMENTS.map((s) => `${s};`).join('\n');
+
+/**
+ * Apply the Pluts schema to a SQLite-backed Durable Object's own storage
+ * (`ctx.storage.sql`). Idempotent: a database already at the latest schema is a
+ * no-op. `SqlStorage.exec` runs synchronously against the DO's embedded SQLite
+ * with no network round-trip, so it is safe to call from the DO constructor
+ * inside `blockConcurrencyWhile` — the recommended place to provision storage
+ * before any request is served.
+ *
+ * ```ts
+ * import { migrateSql } from 'pluts';
+ *
+ * export class LedgerDO extends DurableObject {
+ *   constructor(ctx, env) {
+ *     super(ctx, env);
+ *     ctx.blockConcurrencyWhile(() => { migrateSql(ctx.storage.sql); return Promise.resolve(); });
+ *   }
+ * }
+ * ```
+ */
+export function migrateSql(sql: SqlStorage): void {
+  for (const stmt of SCHEMA_STATEMENTS) {
+    sql.exec(stmt).toArray();
+  }
+}

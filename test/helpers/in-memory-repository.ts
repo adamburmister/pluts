@@ -45,7 +45,7 @@ function inRange(date: string, range?: DateRange): boolean {
   return true;
 }
 
-/** A pure in-memory Repository for fast unit tests with no D1 dependency. */
+/** A pure in-memory Repository for fast unit tests with no storage dependency. */
 export class InMemoryRepository implements Repository {
   private accounts = new Map<string, MemAccount>();
   private entries = new Map<string, MemEntry>();

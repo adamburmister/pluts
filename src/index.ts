@@ -38,9 +38,5 @@ export {
   type EntryInput,
 } from './domain/schemas.js';
 export type { Repository } from './db/repository.js';
-export { D1Repository } from './db/d1-repository.js';
-export { migrate } from './db/migrate.js';
-// Schema (DDL source of truth) + D1 driver for consumers wanting query-builder access.
-export { accounts, amounts, entries, entryKeys } from './db/schema.js';
-export { drizzle } from 'drizzle-orm/d1';
-export type { DrizzleD1Database } from 'drizzle-orm/d1';
+export { SqlStorageRepository } from './db/sqlite-storage-repository.js';
+export { SCHEMA_SQL, SCHEMA_STATEMENTS, migrateSql } from './db/schema.js';

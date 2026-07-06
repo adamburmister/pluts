@@ -1,6 +1,6 @@
 # Pluts
 
-A double-entry accounting ledger for TypeScript, targeting Cloudflare Durable Objects with D1 (SQLite).
+A double-entry accounting ledger for TypeScript, targeting Cloudflare Durable Objects (SQLite-backed storage).
 
 Pluts is a TypeScript refactor of the Ruby [Plutus](https://github.com/mbulat/plutus) gem. It implements a complete double-entry bookkeeping system: accounts (Asset, Liability, Equity, Revenue, Expense), journal entries with balanced debit/credit amounts, and reporting (trial balance, balance sheet, income statement).
 
@@ -39,13 +39,11 @@ All public input boundaries are Zod-gated: entry input, account creation, amount
 
 ### Persistence
 
-Pluts uses [Drizzle ORM](https://orm.drizzle.team) over Cloudflare D1. The `Repository` interface decouples the domain from persistence, so the domain can be unit-tested with an in-memory repository. `D1Repository` wraps a `DrizzleD1Database` and is the production implementation — it uses the Drizzle query builder (`db.select()`, `db.insert()`, `db.batch()`) rather than raw SQL.
+Pluts persists over a SQLite-backed Durable Object's own storage (`ctx.storage.sql`), using the synchronous `SqlStorage` API (`sql.exec(sql, ...binds).toArray()/.one()`). The `Repository` interface decouples the domain from persistence, so the domain can be unit-tested with an in-memory repository. `SqlStorageRepository` is the production implementation.
 
-- `src/db/schema.ts` is the single source of truth for DDL (Drizzle table objects).
-- [drizzle-kit](https://orm.drizzle.team/docs/kit-overview) generates versioned SQL migrations from the schema into `./drizzle/`. `bun run db:generate` runs `drizzle-kit generate` and then regenerates the embedded `src/db/migrations.ts`.
-- At runtime, `migrate(db)` applies any pending migrations from the embedded `MIGRATIONS` module — mirroring drizzle-orm's own `migrate()` (same `__drizzle_migrations` tracking table, `folderMillis`/`hash` comparison) but with no filesystem dependency, so it works in a deployed Cloudflare Worker. Dev, prod, and tests share one code path.
-- `wrangler` runs a local D1 instance for development and testing.
-- In production, Pluts is intended to be hosted within a Durable Object, where each DO instance binds to its own D1 database; `migrate(env.DB)` self-provisions each one.
+- `src/db/schema.ts` is the single source of truth for DDL: idempotent `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` statements.
+- `migrateSql(sql)` applies the schema via `sql.exec(...)`. It is idempotent and safe to run on every cold start; existing tables and indexes are left untouched. There is no separate migrations tracking table and no code generator to run.
+- A ledger is hosted *inside* a Durable Object: the DO's private SQLite database (declared via `new_sqlite_classes` in `wrangler.jsonc`) is the ledger. One DO instance = one isolated ledger. `migrateSql(ctx.storage.sql)` self-provisions each one, typically in the DO constructor under `blockConcurrencyWhile`.
 
 ### Tenancy
 
@@ -60,7 +58,7 @@ Four tables (prefixed `pluts_`), defined in `src/db/schema.ts`:
 - `pluts_amounts` — id, type (`'credit'` | `'debit'`), account_id, entry_id, amount (integer minor units)
 - `pluts_entry_keys` — key, entry_id (idempotency-key dedup table)
 
-Run `migrate(db)` to apply pending migrations; it is idempotent and a no-op on an up-to-date database.
+Run `migrateSql(ctx.storage.sql)` to apply the schema; it is idempotent and a no-op on an up-to-date database.
 
 ## Installation
 
@@ -68,22 +66,38 @@ Run `migrate(db)` to apply pending migrations; it is idempotent and a no-op on a
 bun add pluts
 ```
 
-Peer dependencies: `drizzle-orm`, `zod`. For local development, `wrangler` and `miniflare` provide a D1 instance.
+Peer dependency: `zod`. Types for the Workers runtime (`SqlStorage`, `DurableObjectStorage`, `crypto`) come from `@cloudflare/workers-types`.
 
 ## Usage
 
+Hosted inside a Durable Object, where `ctx.storage.sql` is the ledger's database:
+
 ```ts
+import { DurableObject } from 'cloudflare:workers';
 import {
   AccountType,
   Amount,
-  D1Repository,
   Ledger,
-  migrate,
+  migrateSql,
+  SqlStorageRepository,
 } from 'pluts';
 
-// Inside a Durable Object (env.DB is the bound D1):
-await migrate(env.DB);
-const ledger = new Ledger(new D1Repository(env.DB));
+export class LedgerDO extends DurableObject {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // Provision the schema before any request is served.
+    ctx.blockConcurrencyWhile(() => {
+      migrateSql(ctx.storage.sql);
+      return Promise.resolve();
+    });
+  }
+
+  async fetch(req: Request): Promise<Response> {
+    const ledger = new Ledger(new SqlStorageRepository(this.ctx.storage));
+    // ...route requests to ledger.createAccount / ledger.postEntry / reports...
+    return new Response('ok');
+  }
+}
 
 // Create accounts
 const cash = await ledger.createAccount({ name: 'Cash', type: AccountType.Asset });
@@ -110,6 +124,8 @@ await ledger.trialBalance();                             // should be zero
 await ledger.balanceSheet();                             // { assets, liabilities, equity, balanced }
 await ledger.incomeStatement({ fromDate: '2024-01-01' }); // { revenue, expenses, netIncome }
 ```
+
+A complete runnable example lives in the [ledger](../ledger) app, which wraps this pattern in a DO with a JSON REST surface and a seed route.
 
 ### Contra accounts
 
@@ -158,37 +174,32 @@ Rules (enforced via Zod schema + `superRefine`):
 ```sh
 bun run test            # all tests
 bun run test:unit       # domain unit tests (in-memory, fast)
-bun run test:integration # D1 integration tests via Miniflare
 bun run typecheck       # tsc --noEmit
 bun run lint            # biome
 ```
 
-The unit tests cover amount math, balance computation for all account types and contra variants, entry validation, and the trial balance invariant. Integration tests exercise the full D1 persistence path end-to-end.
+The unit tests cover amount math, balance computation for all account types and contra variants, entry validation, and the trial balance invariant, all against an in-memory `Repository`. The `SqlStorageRepository` (production) is exercised end-to-end by the [ledger](../ledger) app's Durable Object.
 
 ## Development
 
 ```sh
 bun install
-bun run dev   # wrangler dev (local D1)
+bun run test     # vitest (domain unit tests, in-memory)
 ```
+
+Pluts is a library; the runnable Durable Object app that consumes it lives in [`../ledger`](../ledger). Run `npm run dev` there for a local DO with SQLite storage.
 
 ### Migrations
 
-Schema changes are made in `src/db/schema.ts`, then materialised into versioned SQL via:
+The schema is defined as idempotent DDL in `src/db/schema.ts` (the `SCHEMA_STATEMENTS` array). To change the schema, edit that file and add/adjust the `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` statements. `migrateSql(ctx.storage.sql)` applies them on every cold start; existing objects are skipped, so there is no separate "generate migrations" step or tracking table.
+
+Fresh-DBs only: if you change a `CREATE TABLE` definition in a way that conflicts with an already-provisioned DO SQLite database, reset the local DO storage so it is recreated cleanly:
 
 ```sh
-bun run db:generate   # drizzle-kit generate + regenerate src/db/migrations.ts
+rm -rf ../ledger/.wrangler/state/v3/do
 ```
 
-Both `./drizzle/` (the generated migrations + `meta/_journal.json`) and `src/db/migrations.ts` (the embedded copy the runtime migrator reads) are committed so library consumers get migrations without running the generator.
-
-Fresh-DBs only: drizzle-kit's baseline migration uses `CREATE TABLE` (not `IF NOT EXISTS`), so a local D1 provisioned by an older migrator will conflict. After pulling schema changes, wipe the local dev D1 once so it is recreated cleanly:
-
-```sh
-rm -rf .wrangler/state/v3/d1
-```
-
-The next `bun run dev` / `bun run test` provisions a fresh D1 and `migrate()` applies the baseline cleanly.
+The next `npm run dev` in `ledger` provisions a fresh DO and `migrateSql` applies the schema cleanly.
 
 ## License
 

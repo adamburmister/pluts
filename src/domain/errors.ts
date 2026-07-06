@@ -49,9 +49,9 @@ export class ValidationError extends Error {
 
 /**
  * Thrown when the persistence layer rejects an operation for a reason that
- * isn't input validation (e.g. a foreign-key or unique-constraint violation at
- * the DB level). Carries the underlying cause for diagnostics. Used by the D1
- * repository to give callers a typed alternative to raw D1 errors.
+ * isn't input validation (e.g. a foreign-key violation at the storage level).
+ * Carries the underlying cause for diagnostics. Used by the SqlStorage
+ * repository to give callers a typed alternative to raw storage errors.
  */
 export class RepositoryError extends Error {
   constructor(message: string, cause?: unknown) {
