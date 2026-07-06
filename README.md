@@ -45,6 +45,24 @@ Pluts persists over a SQLite-backed Durable Object's own storage (`ctx.storage.s
 - `migrate(sql)` applies the schema via `sql.exec(...)`. It is idempotent and safe to run on every cold start; existing tables and indexes are left untouched. There is no separate migrations tracking table and no code generator to run.
 - A ledger is hosted _inside_ a Durable Object: the DO's private SQLite database (declared via `new_sqlite_classes` in `wrangler.jsonc`) is the ledger. One DO instance = one isolated ledger. `migrate(ctx.storage.sql)` self-provisions each one, typically in the DO constructor under `blockConcurrencyWhile`.
 
+### SQL implementation and portability
+
+Pluts's production persistence is implemented against Cloudflare Durable Objects' embedded SQLite via the synchronous `SqlStorage` API. The concrete implementation lives in `src/db/sqlite-storage-repository.ts` and runs the schema statements defined in `src/db/schema.ts` using `migrate(ctx.storage.sql)`.
+
+If you want to run Pluts outside of Cloudflare (or support additional backends), implement the `Repository` interface in `src/db/repository.ts` for your chosen storage. Key guidance:
+
+- Implement the same transactional semantics for `insertEntry` (all row inserts + idempotency-key insert must be atomic). Use your DB's transactions.
+- Apply the schema in `SCHEMA_STATEMENTS` (see `src/db/schema.ts`) or translate it to your DB's DDL before first use.
+- Persist amounts as integer minor units (the library uses `bigint` internally; convert to/from your driver's numeric type safely).
+- Ensure `getAccountByName`, `sumByType`, `sumCredits`/`sumDebits`, and `amountsForAccount` match the SQL semantics expected by the domain code.
+
+Examples:
+
+- Node + SQLite: implement a `NodeSqliteRepository` using `better-sqlite3` or `sqlite3`, run the `SCHEMA_STATEMENTS` once on startup, and wrap `insertEntry` in a transaction.
+- Postgres: translate the DDL (types, index syntax) and implement `Repository` methods with `pg`/`knex`; be mindful of integer sizes and use `bigint`/numeric as appropriate.
+
+Because the domain is decoupled via `Repository` and tests exercise the domain with an in-memory repository, porting is limited to a single new repository adapter — the rest of Pluts should work unchanged.
+
 ### Tenancy
 
 Tenancy is intentionally **not** included. Multi-tenancy is provided by Durable Object isolation: one DO instance = one ledger. Account names are unique within a ledger.
