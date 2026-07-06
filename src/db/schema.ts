@@ -1,4 +1,4 @@
-import type { SqlStorage } from '@cloudflare/workers-types';
+import type { SqlStorage } from "@cloudflare/workers-types";
 
 /**
  * Pluts schema — the single source of truth for DDL, applied to a
@@ -50,10 +50,12 @@ export const SCHEMA_STATEMENTS: string[] = [
 /**
  * The full Pluts schema as a single SQL string (statements joined with `;\n`),
  * for inspection or for runtimes whose `exec` splits on `;`. To apply it to a
- * Durable Object's storage, prefer {@link migrateSql}, which runs each
+ * Durable Object's storage, prefer {@link migrate}, which runs each
  * statement individually via `SqlStorage.exec` (robust across runtimes).
  */
-export const SCHEMA_SQL: string = SCHEMA_STATEMENTS.map((s) => `${s};`).join('\n');
+export const SCHEMA_SQL: string = SCHEMA_STATEMENTS.map((s) => `${s};`).join(
+  "\n",
+);
 
 /**
  * Apply the Pluts schema to a SQLite-backed Durable Object's own storage
@@ -64,17 +66,17 @@ export const SCHEMA_SQL: string = SCHEMA_STATEMENTS.map((s) => `${s};`).join('\n
  * before any request is served.
  *
  * ```ts
- * import { migrateSql } from 'pluts';
+ * import { migrate } from 'pluts';
  *
  * export class LedgerDO extends DurableObject {
  *   constructor(ctx, env) {
  *     super(ctx, env);
- *     ctx.blockConcurrencyWhile(() => { migrateSql(ctx.storage.sql); return Promise.resolve(); });
+ *     ctx.blockConcurrencyWhile(() => { migrate(ctx.storage.sql); return Promise.resolve(); });
  *   }
  * }
  * ```
  */
-export function migrateSql(sql: SqlStorage): void {
+export function migrate(sql: SqlStorage): void {
   for (const stmt of SCHEMA_STATEMENTS) {
     sql.exec(stmt).toArray();
   }

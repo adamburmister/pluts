@@ -1,9 +1,9 @@
-export { Amount, formatAmount, SCALE } from './domain/amount.js';
+export { Amount, formatAmount, SCALE } from "./domain/amount.js";
 export {
   Account,
   aggregateBalances,
   computeBalance,
-} from './domain/account.js';
+} from "./domain/account.js";
 export {
   AmountRecord,
   Entry,
@@ -12,20 +12,24 @@ export {
   type AmountKind,
   type EntryPayload,
   type ResolvedAmountLine,
-} from './domain/entry.js';
+} from "./domain/entry.js";
 export {
   Ledger,
   type BalanceSheet,
   type IncomeStatement,
-} from './domain/ledger.js';
+} from "./domain/ledger.js";
 export {
   ACCOUNT_TYPES,
   AccountType,
   normalCreditBalance,
   type DateRange,
   toDateISO,
-} from './domain/types.js';
-export { RepositoryError, ValidationError, type ValidationIssue } from './domain/errors.js';
+} from "./domain/types.js";
+export {
+  RepositoryError,
+  ValidationError,
+  type ValidationIssue,
+} from "./domain/errors.js";
 export {
   amountSchema,
   createAccountSchema,
@@ -35,7 +39,11 @@ export {
   type AmountInput,
   type CreateAccountInput,
   type EntryInput,
-} from './domain/schemas.js';
-export type { Repository } from './db/repository.js';
-export { SqlStorageRepository } from './db/sqlite-storage-repository.js';
-export { SCHEMA_SQL, SCHEMA_STATEMENTS, migrateSql } from './db/schema.js';
+} from "./domain/schemas.js";
+export type { Repository } from "./db/repository.js";
+export { SqlStorageRepository } from "./db/sqlite-storage-repository.js";
+export {
+  SCHEMA_SQL,
+  SCHEMA_STATEMENTS,
+  migrate as migrate,
+} from "./db/schema.js";

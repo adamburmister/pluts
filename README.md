@@ -42,8 +42,8 @@ All public input boundaries are Zod-gated: entry input, account creation, amount
 Pluts persists over a SQLite-backed Durable Object's own storage (`ctx.storage.sql`), using the synchronous `SqlStorage` API (`sql.exec(sql, ...binds).toArray()/.one()`). The `Repository` interface decouples the domain from persistence, so the domain can be unit-tested with an in-memory repository. `SqlStorageRepository` is the production implementation.
 
 - `src/db/schema.ts` is the single source of truth for DDL: idempotent `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` statements.
-- `migrateSql(sql)` applies the schema via `sql.exec(...)`. It is idempotent and safe to run on every cold start; existing tables and indexes are left untouched. There is no separate migrations tracking table and no code generator to run.
-- A ledger is hosted *inside* a Durable Object: the DO's private SQLite database (declared via `new_sqlite_classes` in `wrangler.jsonc`) is the ledger. One DO instance = one isolated ledger. `migrateSql(ctx.storage.sql)` self-provisions each one, typically in the DO constructor under `blockConcurrencyWhile`.
+- `migrate(sql)` applies the schema via `sql.exec(...)`. It is idempotent and safe to run on every cold start; existing tables and indexes are left untouched. There is no separate migrations tracking table and no code generator to run.
+- A ledger is hosted _inside_ a Durable Object: the DO's private SQLite database (declared via `new_sqlite_classes` in `wrangler.jsonc`) is the ledger. One DO instance = one isolated ledger. `migrate(ctx.storage.sql)` self-provisions each one, typically in the DO constructor under `blockConcurrencyWhile`.
 
 ### Tenancy
 
@@ -58,7 +58,7 @@ Four tables (prefixed `pluts_`), defined in `src/db/schema.ts`:
 - `pluts_amounts` — id, type (`'credit'` | `'debit'`), account_id, entry_id, amount (integer minor units)
 - `pluts_entry_keys` — key, entry_id (idempotency-key dedup table)
 
-Run `migrateSql(ctx.storage.sql)` to apply the schema; it is idempotent and a no-op on an up-to-date database.
+Run `migrate(ctx.storage.sql)` to apply the schema; it is idempotent and a no-op on an up-to-date database.
 
 ## Installation
 
@@ -73,21 +73,21 @@ Peer dependency: `zod`. Types for the Workers runtime (`SqlStorage`, `DurableObj
 Hosted inside a Durable Object, where `ctx.storage.sql` is the ledger's database:
 
 ```ts
-import { DurableObject } from 'cloudflare:workers';
+import { DurableObject } from "cloudflare:workers";
 import {
   AccountType,
   Amount,
   Ledger,
-  migrateSql,
+  migrate,
   SqlStorageRepository,
-} from 'pluts';
+} from "pluts";
 
 export class LedgerDO extends DurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // Provision the schema before any request is served.
     ctx.blockConcurrencyWhile(() => {
-      migrateSql(ctx.storage.sql);
+      migrate(ctx.storage.sql);
       return Promise.resolve();
     });
   }
@@ -95,43 +95,56 @@ export class LedgerDO extends DurableObject {
   async fetch(req: Request): Promise<Response> {
     const ledger = new Ledger(new SqlStorageRepository(this.ctx.storage));
     // ...route requests to ledger.createAccount / ledger.postEntry / reports...
-    return new Response('ok');
+    return new Response("ok");
   }
 }
 
 // Create accounts
-const cash = await ledger.createAccount({ name: 'Cash', type: AccountType.Asset });
-await ledger.createAccount({ name: 'Sales Revenue', type: AccountType.Revenue });
-await ledger.createAccount({ name: 'Sales Tax Payable', type: AccountType.Liability });
+const cash = await ledger.createAccount({
+  name: "Cash",
+  type: AccountType.Asset,
+});
+await ledger.createAccount({
+  name: "Sales Revenue",
+  type: AccountType.Revenue,
+});
+await ledger.createAccount({
+  name: "Sales Tax Payable",
+  type: AccountType.Liability,
+});
 
 // Post a balanced entry (debits === credits). Amounts accept number|string|Amount.
 await ledger.postEntry({
-  description: 'Sold widgets',
-  debits: [{ accountName: 'Cash', amount: 50 }],
+  description: "Sold widgets",
+  debits: [{ accountName: "Cash", amount: 50 }],
   credits: [
-    { accountName: 'Sales Revenue', amount: 45 },
-    { accountName: 'Sales Tax Payable', amount: '5.00' },
+    { accountName: "Sales Revenue", amount: 45 },
+    { accountName: "Sales Tax Payable", amount: "5.00" },
   ],
 });
 
 // Balances
-await ledger.accountBalance(cash);                       // per-account
-await ledger.balanceByType(AccountType.Asset);           // per-type
-await ledger.trialBalance();                             // should be zero
+await ledger.accountBalance(cash); // per-account
+await ledger.balanceByType(AccountType.Asset); // per-type
+await ledger.trialBalance(); // should be zero
 
 // Reports
-await ledger.balanceSheet();                             // { assets, liabilities, equity, balanced }
-await ledger.incomeStatement({ fromDate: '2024-01-01' }); // { revenue, expenses, netIncome }
+await ledger.balanceSheet(); // { assets, liabilities, equity, balanced }
+await ledger.incomeStatement({ fromDate: "2024-01-01" }); // { revenue, expenses, netIncome }
 ```
 
-A complete runnable example lives in the [ledger](../ledger) app, which wraps this pattern in a DO with a JSON REST surface and a seed route.
+A complete runnable example lives in the [pluts-ledger-do](https://github.com/adamburmister/pluts-ledger-do) app, which wraps this pattern in a DO with a JSON REST surface and a seed route.
 
 ### Contra accounts
 
 A contra account has its normal balance swapped:
 
 ```ts
-await ledger.createAccount({ name: 'Drawing', type: AccountType.Equity, contra: true });
+await ledger.createAccount({
+  name: "Drawing",
+  type: AccountType.Equity,
+  contra: true,
+});
 ```
 
 ### Date ranges
@@ -139,7 +152,10 @@ await ledger.createAccount({ name: 'Drawing', type: AccountType.Equity, contra: 
 Balance methods accept an optional `{ fromDate, toDate }` (Date or `yyyy-mm-dd` string):
 
 ```ts
-await ledger.accountBalance(cash, { fromDate: '2024-01-01', toDate: new Date() });
+await ledger.accountBalance(cash, {
+  fromDate: "2024-01-01",
+  toDate: new Date(),
+});
 ```
 
 ## Validation
@@ -161,6 +177,7 @@ try {
 ```
 
 Rules (enforced via Zod schema + `superRefine`):
+
 - `description` required (non-empty)
 - at least one debit and one credit
 - every amount requires an account and a non-negative value
@@ -177,7 +194,7 @@ bun run typecheck       # tsc --noEmit
 bun run lint            # biome
 ```
 
-The unit tests cover amount math, balance computation for all account types and contra variants, entry validation, and the trial balance invariant, all against an in-memory `Repository`. The `SqlStorageRepository` (production) is exercised end-to-end by the [ledger](../ledger) app's Durable Object.
+The unit tests cover amount math, balance computation for all account types and contra variants, entry validation, and the trial balance invariant, all against an in-memory `Repository`. The `SqlStorageRepository` (production) is exercised end-to-end by the [pluts-ledger-do](https://github.com/adamburmister/pluts-ledger-do) app's Durable Object.
 
 ## Development
 
@@ -186,11 +203,11 @@ bun install
 bun run test     # vitest (domain unit tests, in-memory)
 ```
 
-Pluts is a library; the runnable Durable Object app that consumes it lives in [`../ledger`](../ledger). Run `npm run dev` there for a local DO with SQLite storage.
+Pluts is a library; the runnable Durable Object app that consumes it lives in [pluts-ledger-do](https://github.com/adamburmister/pluts-ledger-do) project. Run `npm run dev` there for a local DO with SQLite storage.
 
 ### Migrations
 
-The schema is defined as idempotent DDL in `src/db/schema.ts` (the `SCHEMA_STATEMENTS` array). To change the schema, edit that file and add/adjust the `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` statements. `migrateSql(ctx.storage.sql)` applies them on every cold start; existing objects are skipped, so there is no separate "generate migrations" step or tracking table.
+The schema is defined as idempotent DDL in `src/db/schema.ts` (the `SCHEMA_STATEMENTS` array). To change the schema, edit that file and add/adjust the `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` statements. `migrate(ctx.storage.sql)` applies them on every cold start; existing objects are skipped, so there is no separate "generate migrations" step or tracking table.
 
 Fresh-DBs only: if you change a `CREATE TABLE` definition in a way that conflicts with an already-provisioned DO SQLite database, reset the local DO storage so it is recreated cleanly:
 
@@ -198,7 +215,7 @@ Fresh-DBs only: if you change a `CREATE TABLE` definition in a way that conflict
 rm -rf ../ledger/.wrangler/state/v3/do
 ```
 
-The next `npm run dev` in `ledger` provisions a fresh DO and `migrateSql` applies the schema cleanly.
+The next `npm run dev` in `ledger` provisions a fresh DO and `migrate` applies the schema cleanly.
 
 ## License
 
