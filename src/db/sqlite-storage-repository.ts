@@ -9,12 +9,7 @@ import {
   amountsFromPayload,
 } from '../domain/entry.js';
 import { RepositoryError, ValidationError } from '../domain/errors.js';
-import {
-  type AccountType,
-  type CommercialDocumentRef,
-  type DateRange,
-  toDateISO,
-} from '../domain/types.js';
+import { type AccountType, type DateRange, toDateISO } from '../domain/types.js';
 import type { Repository } from './repository.js';
 
 /**
@@ -34,8 +29,6 @@ interface EntryRow {
   id: string;
   description: string;
   date: string;
-  commercial_document_id: string | null;
-  commercial_document_type: string | null;
   posted_at: string;
 }
 interface AmountRow {
@@ -191,7 +184,6 @@ export class SqlStorageRepository implements Repository {
   async insertEntry(payload: EntryPayload): Promise<Entry> {
     const id = uuid();
     const now = new Date().toISOString();
-    const doc = payload.commercialDocument;
     const { debits, credits } = amountsFromPayload(payload, id);
 
     // The entry row, every amount row, and (if present) the idempotency-key row
@@ -201,12 +193,10 @@ export class SqlStorageRepository implements Repository {
       this.storage.transactionSync(() => {
         this.sql
           .exec(
-            'INSERT INTO pluts_entries (id, description, date, commercial_document_id, commercial_document_type, posted_at) VALUES (?, ?, ?, ?, ?, ?)',
+            'INSERT INTO pluts_entries (id, description, date, posted_at) VALUES (?, ?, ?, ?)',
             id,
             payload.description,
             payload.date,
-            doc?.id ?? null,
-            doc?.type ?? null,
             now,
           )
           .toArray();
@@ -246,15 +236,12 @@ export class SqlStorageRepository implements Repository {
       throw new RepositoryError('Failed to persist entry', e);
     }
 
-    return new Entry(id, payload.description, payload.date, doc, debits, credits, now);
+    return new Entry(id, payload.description, payload.date, debits, credits, now);
   }
 
   async getEntry(id: string): Promise<Entry | null> {
     const rows = this.sql
-      .exec<EntryRow>(
-        'SELECT id, description, date, commercial_document_id, commercial_document_type, posted_at FROM pluts_entries WHERE id = ?',
-        id,
-      )
+      .exec<EntryRow>('SELECT id, description, date, posted_at FROM pluts_entries WHERE id = ?', id)
       .toArray();
     const row = rows[0];
     return row ? this.loadEntry(row) : null;
@@ -263,7 +250,7 @@ export class SqlStorageRepository implements Repository {
   async getEntryByKey(key: string): Promise<Entry | null> {
     const rows = this.sql
       .exec<EntryRow>(
-        `SELECT e.id, e.description, e.date, e.commercial_document_id, e.commercial_document_type, e.posted_at
+        `SELECT e.id, e.description, e.date, e.posted_at
          FROM pluts_entries e
          INNER JOIN pluts_entry_keys k ON k.entry_id = e.id
          WHERE k.key = ?`,
@@ -278,7 +265,7 @@ export class SqlStorageRepository implements Repository {
     const dir = order === 'asc' ? 'ASC' : 'DESC';
     const rows = this.sql
       .exec<EntryRow>(
-        `SELECT id, description, date, commercial_document_id, commercial_document_type, posted_at FROM pluts_entries ORDER BY date ${dir}`,
+        `SELECT id, description, date, posted_at FROM pluts_entries ORDER BY date ${dir}`,
       )
       .toArray();
     // loadEntry issues its own exec per entry. SqlStorage cursors are consumed
@@ -325,7 +312,7 @@ export class SqlStorageRepository implements Repository {
   async entriesForAccount(accountId: string): Promise<Entry[]> {
     const rows = this.sql
       .exec<EntryRow>(
-        `SELECT DISTINCT e.id, e.description, e.date, e.commercial_document_id, e.commercial_document_type, e.posted_at
+        `SELECT DISTINCT e.id, e.description, e.date, e.posted_at
          FROM pluts_entries e
          INNER JOIN pluts_amounts a ON a.entry_id = e.id
          WHERE a.account_id = ?
@@ -367,14 +354,7 @@ export class SqlStorageRepository implements Repository {
     const records = this.hydrateAmounts(amounts);
     const debits = records.filter((r) => r.kind === 'debit');
     const credits = records.filter((r) => r.kind === 'credit');
-    const doc =
-      row.commercial_document_id && row.commercial_document_type
-        ? ({
-            id: row.commercial_document_id,
-            type: row.commercial_document_type,
-          } as CommercialDocumentRef)
-        : null;
-    return new Entry(row.id, row.description, row.date, doc, debits, credits, row.posted_at);
+    return new Entry(row.id, row.description, row.date, debits, credits, row.posted_at);
   }
 
   private hydrateAmounts(rows: AmountRow[]): AmountRecord[] {

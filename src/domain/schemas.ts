@@ -24,14 +24,6 @@ export const amountSchema = z
   ])
   .transform((v) => (v instanceof Amount ? v : Amount.fromMajor(v)));
 
-/** A reference to an arbitrary commercial document associated with an entry. */
-const commercialDocumentSchema = z
-  .object({
-    id: z.string().min(1),
-    type: z.string().min(1),
-  })
-  .optional();
-
 /** A `Date | string` normalized to an ISO `yyyy-mm-dd` string. */
 const isoDateSchema = z.union([z.date(), z.string()]).transform(toDateISO);
 
@@ -73,7 +65,6 @@ export const entryInputSchema = z
     idempotencyKey: z.string().min(1).optional(),
     description: z.string().min(1),
     date: isoDateSchema.optional(),
-    commercialDocument: commercialDocumentSchema,
     debits: z.array(amountLineSchema),
     credits: z.array(amountLineSchema),
   })

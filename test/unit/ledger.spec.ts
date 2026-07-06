@@ -102,18 +102,6 @@ describe('Ledger (in-memory)', () => {
       });
       expect(entry.date).toBe(new Date().toISOString().slice(0, 10));
     });
-
-    it('stores a commercial document reference', async () => {
-      await ledger.createAccount({ name: 'Cash', type: AccountType.Asset });
-      await ledger.createAccount({ name: 'Revenue', type: AccountType.Revenue });
-      const entry = await ledger.postEntry({
-        description: 'Sale',
-        commercialDocument: { id: 'inv-1', type: 'Invoice' },
-        debits: [{ accountName: 'Cash', amount: Amount.fromMajor(1) }],
-        credits: [{ accountName: 'Revenue', amount: Amount.fromMajor(1) }],
-      });
-      expect(entry.commercialDocument).toEqual({ id: 'inv-1', type: 'Invoice' });
-    });
   });
 
   describe('idempotency', () => {

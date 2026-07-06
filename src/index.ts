@@ -22,7 +22,6 @@ export {
   ACCOUNT_TYPES,
   AccountType,
   normalCreditBalance,
-  type CommercialDocumentRef,
   type DateRange,
   toDateISO,
 } from './domain/types.js';

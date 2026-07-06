@@ -2,7 +2,7 @@ import { type Account } from './account.js';
 import { Amount } from './amount.js';
 import { ValidationError, type ValidationIssue } from './errors.js';
 import { type AmountLine, type EntryInput, entryInputSchema, toIssues } from './schemas.js';
-import { type CommercialDocumentRef, toDateISO } from './types.js';
+import { toDateISO } from './types.js';
 
 export type AmountKind = 'credit' | 'debit';
 
@@ -13,16 +13,15 @@ export interface ResolvedAmountLine {
 }
 
 /**
- * A validated, unpersisted entry: description, date, document, and resolved
- * debit/credit lines (each carrying an `Account` and an `Amount`). Has no id;
- * persistence assigns one. Immutable. Carries an optional client-supplied
+ * A validated, unpersisted entry: description, date, and resolved debit/credit
+ * lines (each carrying an `Account` and an `Amount`). Has no id; persistence
+ * assigns one. Immutable. Carries an optional client-supplied
  * {@link idempotencyKey} so the repository can dedup retries atomically.
  */
 export interface EntryPayload {
   readonly idempotencyKey?: string;
   readonly description: string;
   readonly date: string;
-  readonly commercialDocument: CommercialDocumentRef | null;
   readonly debits: readonly ResolvedAmountLine[];
   readonly credits: readonly ResolvedAmountLine[];
 }
@@ -52,7 +51,6 @@ export class Entry {
     readonly id: string,
     readonly description: string,
     readonly date: string,
-    readonly commercialDocument: CommercialDocumentRef | null,
     readonly debitAmounts: readonly AmountRecord[],
     readonly creditAmounts: readonly AmountRecord[],
     readonly postedAt: string,
@@ -86,7 +84,7 @@ export function buildEntry(
   if (!parsed.success) {
     throw new ValidationError(toIssues(parsed.error.issues));
   }
-  const { description, commercialDocument, debits, credits } = parsed.data;
+  const { description, debits, credits } = parsed.data;
   const date = parsed.data.date ?? toDateISO(now());
   const { idempotencyKey } = parsed.data;
 
@@ -128,7 +126,6 @@ export function buildEntry(
   const payload: EntryPayload = {
     description,
     date,
-    commercialDocument: commercialDocument ?? null,
     debits: resolvedDebits,
     credits: resolvedCredits,
     ...(idempotencyKey ? { idempotencyKey } : {}),

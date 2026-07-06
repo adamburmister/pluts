@@ -8,12 +8,7 @@ import {
   amountsFromPayload,
 } from '../../src/domain/entry.js';
 import { ValidationError } from '../../src/domain/errors.js';
-import {
-  type AccountType,
-  type CommercialDocumentRef,
-  type DateRange,
-  toDateISO,
-} from '../../src/domain/types.js';
+import { type AccountType, type DateRange, toDateISO } from '../../src/domain/types.js';
 
 interface MemAccount {
   id: string;
@@ -28,7 +23,6 @@ interface MemEntry {
   id: string;
   description: string;
   date: string;
-  doc: CommercialDocumentRef | null;
   postedAt: string;
   debitAmounts: AmountRecord[];
   creditAmounts: AmountRecord[];
@@ -122,7 +116,6 @@ export class InMemoryRepository implements Repository {
       id,
       description: payload.description,
       date: payload.date,
-      doc: payload.commercialDocument,
       postedAt: now,
       debitAmounts: debits,
       creditAmounts: credits,
@@ -218,7 +211,6 @@ export class InMemoryRepository implements Repository {
       mem.id,
       mem.description,
       mem.date,
-      mem.doc,
       mem.debitAmounts,
       mem.creditAmounts,
       mem.postedAt,

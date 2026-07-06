@@ -31,12 +31,6 @@ export interface DateRange {
   toDate?: Date | string;
 }
 
-/** A reference to an arbitrary commercial document associated with an entry. */
-export interface CommercialDocumentRef {
-  id: string;
-  type: string;
-}
-
 /** Normalizes a Date | string to an ISO yyyy-mm-dd string. */
 export function toDateISO(d: Date | string): string {
   if (typeof d === 'string') {

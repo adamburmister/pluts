@@ -54,7 +54,7 @@ Tenancy is intentionally **not** included. Multi-tenancy is provided by Durable 
 Four tables (prefixed `pluts_`), defined in `src/db/schema.ts`:
 
 - `pluts_accounts` — id, name, type (CHECK-constrained to the five account types), contra, created_at
-- `pluts_entries` — id, description, date, commercial_document_id/type, posted_at
+- `pluts_entries` — id, description, date, posted_at
 - `pluts_amounts` — id, type (`'credit'` | `'debit'`), account_id, entry_id, amount (integer minor units)
 - `pluts_entry_keys` — key, entry_id (idempotency-key dedup table)
 
@@ -107,7 +107,6 @@ await ledger.createAccount({ name: 'Sales Tax Payable', type: AccountType.Liabil
 // Post a balanced entry (debits === credits). Amounts accept number|string|Amount.
 await ledger.postEntry({
   description: 'Sold widgets',
-  commercialDocument: { id: 'inv-1', type: 'Invoice' },
   debits: [{ accountName: 'Cash', amount: 50 }],
   credits: [
     { accountName: 'Sales Revenue', amount: 45 },

@@ -25,12 +25,9 @@ export const SCHEMA_STATEMENTS: string[] = [
   id TEXT PRIMARY KEY NOT NULL,
   description TEXT NOT NULL,
   date TEXT NOT NULL,
-  commercial_document_id TEXT,
-  commercial_document_type TEXT,
   posted_at TEXT NOT NULL
 )`,
   `CREATE INDEX IF NOT EXISTS pluts_entries_date_idx ON pluts_entries (date)`,
-  `CREATE INDEX IF NOT EXISTS pluts_entries_commercial_doc_idx ON pluts_entries (commercial_document_id, commercial_document_type)`,
   `CREATE TABLE IF NOT EXISTS pluts_amounts (
   id TEXT PRIMARY KEY NOT NULL,
   type TEXT NOT NULL,
