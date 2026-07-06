@@ -1,0 +1,11 @@
+name = "pluts"
+main = "worker/index.ts"
+compatibility_date = "2024-12-01"
+
+# Local development uses the in-memory/local D1 instance.
+# For production, create a remote D1 database via `wrangler d1 create pluts-db`
+# and replace `database_id` below with the returned UUID.
+[[d1_databases]]
+binding = "DB"
+database_name = "pluts-db"
+database_id = "local"

@@ -1,0 +1,34 @@
+{
+  "name": "pluts",
+  "version": "0.1.0",
+  "description": "A double-entry accounting ledger for TypeScript, targeting Cloudflare Durable Objects with D1.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:watch": "vitest",
+    "lint": "biome check src test worker",
+    "format": "biome format --write src test worker",
+    "typecheck": "tsc --noEmit",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.40.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@cloudflare/vitest-pool-workers": "^0.8.0",
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "drizzle-kit": "^0.31.0",
+    "miniflare": "^3.20250101.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^3.100.0"
+  }
+}
