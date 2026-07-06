@@ -13,10 +13,7 @@
     "indentStyle": "space"
   },
   "linter": {
-    "enabled": true,
-    "rules": {
-      "preset": "recommended"
-    }
+    "enabled": true
   },
   "javascript": {
     "formatter": {
