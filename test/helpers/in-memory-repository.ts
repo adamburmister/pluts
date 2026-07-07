@@ -2,10 +2,10 @@ import type { Repository } from "../../src/db/repository";
 import { Account } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
 import {
-  AmountRecord,
+  type AmountRecord,
+  amountsFromPayload,
   Entry,
   type EntryPayload,
-  amountsFromPayload,
 } from "../../src/domain/entry";
 import { ValidationError } from "../../src/domain/errors";
 import {

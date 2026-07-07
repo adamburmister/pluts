@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Amount, SCALE, formatAmount } from "../../src/domain/amount";
+import { Amount, formatAmount, SCALE } from "../../src/domain/amount";
 
 describe("Amount", () => {
   it("exposes a 2-decimal scale", () => {

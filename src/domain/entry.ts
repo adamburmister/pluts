@@ -1,5 +1,5 @@
-import { type Account } from "./account.js";
-import { Amount } from "./amount.js";
+import type { Account } from "./account.js";
+import type { Amount } from "./amount.js";
 import { ValidationError, type ValidationIssue } from "./errors.js";
 import {
   type AmountLine,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { Account } from "../../src/domain/account";
+import type { Account } from "../../src/domain/account";
 import { Amount, formatAmount } from "../../src/domain/amount";
 import { ValidationError } from "../../src/domain/errors";
 import { Ledger } from "../../src/domain/ledger";
@@ -80,7 +80,7 @@ describe("Ledger (in-memory)", () => {
         debits: [{ account: cash, amount: Amount.fromMajor(50) }],
         credits: [{ account: rev, amount: Amount.fromMajor(50) }],
       });
-      expect(entry.debitAmounts[0]!.account.id).toBe(cash.id);
+      expect(entry.debitAmounts[0].account.id).toBe(cash.id);
     });
 
     it("throws ValidationError when amounts do not cancel", async () => {

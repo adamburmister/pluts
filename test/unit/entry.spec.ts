@@ -3,7 +3,7 @@ import { Account } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
 import { buildEntry } from "../../src/domain/entry";
 import { ValidationError, type ValidationIssue } from "../../src/domain/errors";
-import { type EntryInput } from "../../src/domain/schemas";
+import type { EntryInput } from "../../src/domain/schemas";
 import { AccountType } from "../../src/domain/types";
 
 function acct(name: string, type = AccountType.Asset): Account {

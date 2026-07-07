@@ -4,9 +4,9 @@ import { Amount } from "../domain/amount";
 import {
   type AmountKind,
   AmountRecord,
+  amountsFromPayload,
   Entry,
   type EntryPayload,
-  amountsFromPayload,
 } from "../domain/entry";
 import { RepositoryError, ValidationError } from "../domain/errors";
 import { type AccountType, type DateRange, toDateISO } from "../domain/types";
