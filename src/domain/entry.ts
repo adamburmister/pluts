@@ -43,14 +43,14 @@ export class AmountRecord {
     readonly entryId: string,
   ) {}
 
-  toJSON(): string {
-    return JSON.stringify({
+  toJSON(): Record<string, unknown> {
+    return {
       id: this.id,
       kind: this.kind,
       accountId: this.account.id,
       amount: this.amount.toMajor(),
       entryId: this.entryId,
-    });
+    };
   }
 }
 
@@ -71,8 +71,8 @@ export class Entry {
     readonly postedAt: string,
   ) {}
 
-  toJSON(): string {
-    return JSON.stringify({
+  toJSON(): Record<string, unknown> {
+    return {
       id: this.id,
       description: this.description,
       date: this.date,
@@ -85,7 +85,7 @@ export class Entry {
         amount: c.amount.toMajor(),
       })),
       postedAt: this.postedAt,
-    });
+    };
   }
 }
 
