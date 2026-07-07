@@ -1,4 +1,4 @@
-import { Amount } from "./amount";
+import type { Amount } from "./amount";
 import { type AccountType, normalCreditBalance } from "./types";
 
 /** A persisted account record. The `type` discriminates the accounting behaviour. */
