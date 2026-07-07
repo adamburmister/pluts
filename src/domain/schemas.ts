@@ -83,14 +83,28 @@ export const entryInputSchema = z
         message: "Entry must have at least one credit amount",
       });
     }
-    const debitSum = v.debits.reduce((acc, l) => acc + l.amount.minor, 0n);
-    const creditSum = v.credits.reduce((acc, l) => acc + l.amount.minor, 0n);
-    if (debitSum !== creditSum) {
-      ctx.addIssue({
-        code: "custom",
-        path: [],
-        message: "The credit and debit amounts are not equal",
-      });
+    // Only reconcile totals once every line parsed to an `Amount`. If a line's
+    // amount failed the union (e.g. a negative number), its per-line issue
+    // already explains the failure, and summing the raw value here would throw
+    // `TypeError: Cannot mix BigInt and other types` — turning a clean
+    // validation failure into a crash (and `safeParse` must never throw).
+    const amounts = [...v.debits, ...v.credits].map((l) => l.amount);
+    if (amounts.every((a) => a instanceof Amount)) {
+      const debitSum = v.debits.reduce((acc, l) => acc + l.amount.minor, 0n);
+      const creditSum = v.credits.reduce((acc, l) => acc + l.amount.minor, 0n);
+      if (debitSum !== creditSum) {
+        ctx.addIssue({
+          code: "custom",
+          path: [],
+          message: "The credit and debit amounts are not equal",
+        });
+      } else if (debitSum === 0n) {
+        ctx.addIssue({
+          code: "custom",
+          path: [],
+          message: "Entry amounts must be greater than zero",
+        });
+      }
     }
   });
 
