@@ -80,7 +80,8 @@ describe("Ledger (in-memory)", () => {
         debits: [{ account: cash, amount: Amount.fromMajor(50) }],
         credits: [{ account: rev, amount: Amount.fromMajor(50) }],
       });
-      expect(entry.debitAmounts[0].account.id).toBe(cash.id);
+      // biome-ignore lint/style/noNonNullAssertion: Testing
+      expect(entry.debitAmounts[0]!.account.id).toBe(cash.id);
     });
 
     it("throws ValidationError when amounts do not cancel", async () => {
