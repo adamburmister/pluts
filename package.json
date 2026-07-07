@@ -7,6 +7,23 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "files": [
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adamburmister/pluts.git"
+  },
+  "keywords": [
+    "typescript",
+    "accounting",
+    "double-entry",
+    "ledger",
+    "bookkeeping",
+    "cloudflare",
+    "durable-objects",
+    "sqlite"
+  ],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
