@@ -129,8 +129,17 @@ export class Amount {
     return `${whole}.${frac.toString().padStart(SCALE, "0")}`;
   }
 
+  /**
+   * Serialize as a major-units decimal string (e.g. "10.00").
+   *
+   * This makes `JSON.stringify` safe for objects containing an {@link Amount}
+   * (a raw `bigint` would otherwise throw a TypeError). It does NOT help
+   * Workers RPC: structured clone ignores `toJSON` and rejects class
+   * instances, so RPC boundaries must use the DTO mappers (`toEntryDTO`, etc.)
+   * instead.
+   */
   toJSON(): string {
-    return this.minor.toString();
+    return this.toMajor();
   }
 
   toString(): string {

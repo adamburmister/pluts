@@ -45,6 +45,35 @@ Pluts persists over a SQLite-backed Durable Object's own storage (`ctx.storage.s
 - `migrate(sql)` applies the schema via `sql.exec(...)`. It is idempotent and safe to run on every cold start; existing tables and indexes are left untouched. There is no separate migrations tracking table and no code generator to run.
 - A ledger is hosted _inside_ a Durable Object: the DO's private SQLite database (declared via `new_sqlite_classes` in `wrangler.jsonc`) is the ledger. One DO instance = one isolated ledger. `migrate(ctx.storage.sql)` self-provisions each one, typically in the DO constructor under `blockConcurrencyWhile`.
 
+### Serialization at boundaries
+
+Pluts domain objects cannot cross either exit from a Durable Object:
+
+- **Workers RPC** serializes method arguments/returns with structured clone. `bigint` is clone-safe, but class instances like `Amount` and `Entry` are rejected with `DataCloneError`.
+- **JSON REST** uses `JSON.stringify`, which throws `TypeError` on `bigint`.
+
+Returning a raw `Entry` (or any object carrying `Amount`/`Account` instances) from a DO RPC method or HTTP handler fails at runtime.
+
+**RPC methods must return DTOs, never domain objects.** Use the mappers exported from `pluts`:
+
+- `toEntryDTO(entry)` → `EntryDTO`
+- `toAmountLineDTO(line)` → `AmountLineDTO`
+- `toAccountDTO(account)` → `AccountDTO`
+
+These produce deep-plain objects whose monetary fields are fixed-precision decimal strings (`"10.00"`), safe for both structured clone and `JSON.stringify`.
+
+`Amount#toJSON()` returns the major-units decimal string, which makes `JSON.stringify` safe for objects containing an `Amount` — but it does **not** help Workers RPC, because structured clone ignores `toJSON`. Use the DTO mappers at RPC boundaries.
+
+```ts
+// Inside a Durable Object RPC method:
+async postEntry(input: EntryInput): Promise<EntryDTO> {
+  const payload = buildEntry(input, (name) => this.repository.getAccountByName(name));
+  const entry = await this.repository.insertEntry(payload);
+  return toEntryDTO(entry);
+}
+```
+
+
 ### SQL implementation and portability
 
 Pluts's production persistence is implemented against Cloudflare Durable Objects' embedded SQLite via the synchronous `SqlStorage` API. The concrete implementation lives in `src/db/sqlite-storage-repository.ts` and runs the schema statements defined in `src/db/schema.ts` using `migrate(ctx.storage.sql)`.

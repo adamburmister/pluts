@@ -8,22 +8,22 @@ describe("Amount", () => {
 
   describe("fromMajor", () => {
     it("parses whole numbers", () => {
-      expect(Amount.fromMajor(10).toJSON()).toBe("1000");
+      expect(Amount.fromMajor(10).toJSON()).toBe("10.00");
     });
 
     it("parses decimals", () => {
-      expect(Amount.fromMajor("10.50").toJSON()).toBe("1050");
+      expect(Amount.fromMajor("10.50").toJSON()).toBe("10.50");
     });
 
     it("pads fractional digits to the scale", () => {
-      expect(Amount.fromMajor("10.5").toJSON()).toBe("1050");
-      expect(Amount.fromMajor("10").toJSON()).toBe("1000");
+      expect(Amount.fromMajor("10.5").toJSON()).toBe("10.50");
+      expect(Amount.fromMajor("10").toJSON()).toBe("10.00");
     });
 
     it("rounds half-up to the nearest minor unit", () => {
-      expect(Amount.fromMajor(0.005).toJSON()).toBe("1");
-      expect(Amount.fromMajor(0.004).toJSON()).toBe("0");
-      expect(Amount.fromMajor(1.235).toJSON()).toBe("124");
+      expect(Amount.fromMajor(0.005).toJSON()).toBe("0.01");
+      expect(Amount.fromMajor(0.004).toJSON()).toBe("0.00");
+      expect(Amount.fromMajor(1.235).toJSON()).toBe("1.24");
     });
 
     it("rejects negative and non-finite values", () => {
@@ -40,7 +40,7 @@ describe("Amount", () => {
 
   describe("fromMinor / zero", () => {
     it("builds from bigint minor units", () => {
-      expect(Amount.fromMinor(500n).toJSON()).toBe("500");
+      expect(Amount.fromMinor(500n).toJSON()).toBe("5.00");
     });
     it("zero is zero", () => {
       expect(Amount.zero().isZero()).toBe(true);
@@ -50,15 +50,17 @@ describe("Amount", () => {
   describe("arithmetic", () => {
     it("adds", () => {
       expect(Amount.fromMajor(1).add(Amount.fromMajor("2.50")).toJSON()).toBe(
-        "350",
+        "3.50",
       );
     });
     it("subtracts (non-negative only)", () => {
-      expect(Amount.fromMajor(5).sub(Amount.fromMajor(2)).toJSON()).toBe("300");
+      expect(Amount.fromMajor(5).sub(Amount.fromMajor(2)).toJSON()).toBe(
+        "3.00",
+      );
       expect(() => Amount.fromMajor(2).sub(Amount.fromMajor(5))).toThrow();
     });
     it("multiplies by a scalar", () => {
-      expect(Amount.fromMajor("1.50").mul(3).toJSON()).toBe("450");
+      expect(Amount.fromMajor("1.50").mul(3).toJSON()).toBe("4.50");
       expect(() => Amount.fromMajor(1).mul(-1)).toThrow();
     });
     it("is strictly non-negative (no neg/fromSigned back door)", () => {

@@ -12,6 +12,14 @@ export {
 } from "./domain/account.js";
 export { Amount, formatAmount, SCALE } from "./domain/amount.js";
 export {
+  type AccountDTO,
+  type AmountLineDTO,
+  type EntryDTO,
+  toAccountDTO,
+  toAmountLineDTO,
+  toEntryDTO,
+} from "./domain/dto.js";
+export {
   type AmountKind,
   AmountRecord,
   amountsFromPayload,
