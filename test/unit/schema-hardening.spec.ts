@@ -1,0 +1,161 @@
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SCHEMA_STATEMENTS } from "../../src/db/schema";
+
+/**
+ * F-04 / F-14: the ledger tables must be self-defending. Posted entries are
+ * append-only — a stray UPDATE or DELETE from consumer code (which holds the
+ * raw SqlStorage handle by design) must abort, and malformed rows written by
+ * non-library SQL must be rejected at the schema level.
+ *
+ * These tests run the real DDL against SQLite via node:sqlite — the same
+ * engine family as Durable Object storage.
+ */
+describe("schema hardening", () => {
+  let db: DatabaseSync;
+
+  function applySchema() {
+    for (const stmt of SCHEMA_STATEMENTS) {
+      db.exec(stmt);
+    }
+  }
+
+  function seed() {
+    db.prepare(
+      "INSERT INTO pluts_accounts (id, name, type, contra, created_at) VALUES (?, ?, ?, 0, ?)",
+    ).run("acc-1", "Cash", "Asset", "2026-01-01T00:00:00Z");
+    db.prepare(
+      "INSERT INTO pluts_accounts (id, name, type, contra, created_at) VALUES (?, ?, ?, 0, ?)",
+    ).run("acc-2", "Revenue", "Revenue", "2026-01-01T00:00:00Z");
+    db.prepare(
+      "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES (?, ?, ?, ?)",
+    ).run("ent-1", "Sale", "2026-01-05", "2026-01-05T10:00:00Z");
+    db.prepare(
+      "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES (?, ?, ?, ?, ?)",
+    ).run("amt-1", "debit", "acc-1", "ent-1", 10000);
+    db.prepare(
+      "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES (?, ?, ?, ?, ?)",
+    ).run("amt-2", "credit", "acc-2", "ent-1", 10000);
+    db.prepare(
+      "INSERT INTO pluts_entry_keys (key, entry_id) VALUES (?, ?)",
+    ).run("key-1", "ent-1");
+  }
+
+  beforeEach(() => {
+    db = new DatabaseSync(":memory:");
+    applySchema();
+    seed();
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("is idempotent: applying the schema twice succeeds", () => {
+    expect(() => applySchema()).not.toThrow();
+  });
+
+  describe("append-only enforcement (F-04)", () => {
+    it("blocks UPDATE of a posted entry", () => {
+      expect(() =>
+        db.prepare("UPDATE pluts_entries SET date = '2025-12-31'").run(),
+      ).toThrow(/append-only/);
+      expect(() =>
+        db.prepare("UPDATE pluts_entries SET description = 'rewritten'").run(),
+      ).toThrow(/append-only/);
+    });
+
+    it("blocks DELETE of a posted entry", () => {
+      expect(() => db.prepare("DELETE FROM pluts_entries").run()).toThrow(
+        /append-only/,
+      );
+    });
+
+    it("blocks UPDATE of a posted amount", () => {
+      expect(() =>
+        db.prepare("UPDATE pluts_amounts SET amount = 1").run(),
+      ).toThrow(/append-only/);
+    });
+
+    it("blocks DELETE of a posted amount", () => {
+      expect(() => db.prepare("DELETE FROM pluts_amounts").run()).toThrow(
+        /append-only/,
+      );
+    });
+
+    it("blocks UPDATE and DELETE of idempotency keys", () => {
+      expect(() =>
+        db.prepare("UPDATE pluts_entry_keys SET entry_id = 'x'").run(),
+      ).toThrow(/append-only/);
+      expect(() => db.prepare("DELETE FROM pluts_entry_keys").run()).toThrow(
+        /append-only/,
+      );
+    });
+  });
+
+  describe("row validity enforcement (F-14)", () => {
+    it("rejects an amount with an invalid kind", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-x', 'Debit', 'acc-1', 'ent-1', 100)",
+          )
+          .run(),
+      ).toThrow();
+    });
+
+    it("rejects a negative amount", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-x', 'debit', 'acc-1', 'ent-1', -100)",
+          )
+          .run(),
+      ).toThrow();
+    });
+
+    it("rejects a non-integer (float) amount", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-x', 'debit', 'acc-1', 'ent-1', 10.5)",
+          )
+          .run(),
+      ).toThrow();
+    });
+
+    it("rejects an entry with a malformed date", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES ('ent-x', 'bad', 'not-a-date', '2026-01-05T10:00:00Z')",
+          )
+          .run(),
+      ).toThrow();
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES ('ent-y', 'bad', '2026-1-5', '2026-01-05T10:00:00Z')",
+          )
+          .run(),
+      ).toThrow();
+    });
+
+    it("still accepts valid rows", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES ('ent-2', 'ok', '2026-02-01', '2026-02-01T10:00:00Z')",
+          )
+          .run(),
+      ).not.toThrow();
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-3', 'credit', 'acc-1', 'ent-2', 500)",
+          )
+          .run(),
+      ).not.toThrow();
+    });
+  });
+});
