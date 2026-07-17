@@ -52,6 +52,7 @@ export {
   ACCOUNT_TYPES,
   AccountType,
   type DateRange,
+  isValidISODate,
   normalCreditBalance,
   toDateISO,
 } from "./domain/types.js";
