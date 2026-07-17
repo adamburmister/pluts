@@ -1,4 +1,6 @@
 import type { SqlStorage } from "@cloudflare/workers-types";
+import { SCALE } from "../domain/amount";
+import { RepositoryError } from "../domain/errors";
 
 /**
  * Pluts schema — the single source of truth for DDL, applied to a
@@ -45,7 +47,50 @@ export const SCHEMA_STATEMENTS: string[] = [
   entry_id TEXT NOT NULL,
   FOREIGN KEY (entry_id) REFERENCES pluts_entries(id) ON UPDATE no action ON DELETE no action
 )`,
+  // Self-description (audit findings F-07/F-10): the stored integers are
+  // meaningless without the scale (and ideally currency) they denominate, and
+  // schema evolution needs a recorded version. Without this, bumping SCALE
+  // would silently reinterpret every stored amount, and a mixed-currency
+  // routing bug would be undetectable from the data.
+  `CREATE TABLE IF NOT EXISTS pluts_ledger_meta (
+  key TEXT PRIMARY KEY NOT NULL,
+  value TEXT NOT NULL
+)`,
 ];
+
+/**
+ * Version of the Pluts schema this build of the library expects. Recorded in
+ * `pluts_ledger_meta` under `schema_version` by {@link migrate}. Databases
+ * provisioned before the meta table existed are treated as version 0 and
+ * stamped on their next migrate (all DDL is idempotent `IF NOT EXISTS`, so
+ * 0 -> 1 needs no data steps). Future incompatible changes bump this constant
+ * and add explicit upgrade steps to `migrate` — never "reset the database".
+ */
+export const SCHEMA_VERSION = 1;
+
+/** Metadata describing a provisioned ledger database. */
+export interface LedgerMeta {
+  /** ISO-4217-style currency code the ledger's amounts denominate, if stamped. */
+  currency?: string;
+  /** Decimal scale the stored minor units were written at. */
+  scale: number;
+  /** Schema version last stamped by {@link migrate}. */
+  schemaVersion: number;
+}
+
+/** Read the ledger's recorded metadata. Requires {@link migrate} to have run. */
+export function getLedgerMeta(sql: SqlStorage): LedgerMeta {
+  const rows = sql
+    .exec("SELECT key, value FROM pluts_ledger_meta")
+    .toArray() as Array<{ key?: unknown; value?: unknown }>;
+  const map = new Map(rows.map((r) => [String(r.key), String(r.value)]));
+  const currency = map.get("currency");
+  return {
+    ...(currency !== undefined ? { currency } : {}),
+    scale: Number(map.get("scale") ?? SCALE),
+    schemaVersion: Number(map.get("schema_version") ?? 0),
+  };
+}
 
 /**
  * The full Pluts schema as a single SQL string (statements joined with `;\n`),
@@ -76,8 +121,50 @@ export const SCHEMA_SQL: string = SCHEMA_STATEMENTS.map((s) => `${s};`).join(
  * }
  * ```
  */
-export function migrate(sql: SqlStorage): void {
+export function migrate(
+  sql: SqlStorage,
+  opts: { currency?: string } = {},
+): void {
   for (const stmt of SCHEMA_STATEMENTS) {
     sql.exec(stmt).toArray();
+  }
+
+  // Stamp and verify the ledger's self-description. The scale check is the
+  // guard that makes SCALE bumps safe: a ledger written at scale 2 opened by
+  // a build compiled at scale 3 would silently reinterpret every stored
+  // amount 10x smaller — refuse loudly and demand an explicit rescale
+  // migration instead.
+  const meta = getLedgerMeta(sql);
+
+  const stamp = (key: string, value: string) => {
+    sql
+      .exec(
+        "INSERT OR IGNORE INTO pluts_ledger_meta (key, value) VALUES (?, ?)",
+        key,
+        value,
+      )
+      .toArray();
+  };
+
+  const stampedScale = sql
+    .exec("SELECT value FROM pluts_ledger_meta WHERE key = 'scale'")
+    .toArray() as Array<{ value?: unknown }>;
+  if (stampedScale.length > 0 && meta.scale !== SCALE) {
+    throw new RepositoryError(
+      `Ledger was written at scale ${meta.scale} but this build uses scale ${SCALE}; ` +
+        "run a rescale migration on stored minor units before opening it",
+    );
+  }
+  stamp("scale", String(SCALE));
+  stamp("schema_version", String(SCHEMA_VERSION));
+
+  if (opts.currency) {
+    const currency = opts.currency.trim();
+    if (meta.currency && meta.currency !== currency) {
+      throw new RepositoryError(
+        `Ledger is denominated in ${meta.currency}; refusing to open it as ${currency}`,
+      );
+    }
+    stamp("currency", currency);
   }
 }
