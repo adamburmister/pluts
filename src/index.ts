@@ -23,6 +23,7 @@ export {
   type AmountKind,
   AmountRecord,
   amountsFromPayload,
+  assertBalanced,
   buildEntry,
   Entry,
   type EntryPayload,
