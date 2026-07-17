@@ -31,6 +31,16 @@ describe("Ledger (in-memory)", () => {
       ).rejects.toBeInstanceOf(ValidationError);
     });
 
+    // F-01: names must be unique across ALL types. Two accounts named "Cash"
+    // with different types would make name-based posting ambiguous — the
+    // debit would land on whichever row the lookup returned first.
+    it("rejects duplicate names across different account types", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await expect(
+        ledger.createAccount({ name: "Cash", type: AccountType.Liability }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
     it("creates contra accounts", async () => {
       const acc = await ledger.createAccount({
         name: "Drawing",
