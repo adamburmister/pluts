@@ -130,7 +130,7 @@ describe("Ledger (in-memory)", () => {
   });
 
   describe("idempotency", () => {
-    it("returns the previously-persisted entry for a repeated idempotency key", async () => {
+    it("returns the previously-persisted entry for an identical retry", async () => {
       await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
       await ledger.createAccount({
         name: "Revenue",
@@ -140,20 +140,78 @@ describe("Ledger (in-memory)", () => {
       const input = {
         idempotencyKey: "req-123",
         description: "Sale",
+        date: "2026-01-05",
         debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
         credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
       };
 
       const first = await ledger.postEntry(input);
-      // Retry with the same key (and a different payload) must return the same
-      // entry, never post a duplicate.
-      const retry = await ledger.postEntry({
-        ...input,
-        description: "Sale (retry)",
-      });
+      // A byte-identical retry (network replay, DO re-execution) must return
+      // the same entry, never post a duplicate.
+      const retry = await ledger.postEntry({ ...input });
       expect(retry.id).toBe(first.id);
       expect(retry.description).toBe("Sale");
       expect(await ledger.allEntries()).toHaveLength(1);
+    });
+
+    // F-05: the same key with a *different* payload is a client bug, not a
+    // retry. Silently returning the original entry means the second
+    // transaction is never recorded — a lost posting. It must fail loudly.
+    it("throws IdempotencyConflictError when the key is reused with a different payload", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+
+      const first = await ledger.postEntry({
+        idempotencyKey: "req-123",
+        description: "Sale A",
+        date: "2026-01-05",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
+        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
+      });
+
+      await expect(
+        ledger.postEntry({
+          idempotencyKey: "req-123",
+          description: "Sale B (different!)",
+          date: "2026-01-05",
+          debits: [{ accountName: "Cash", amount: Amount.fromMajor(999) }],
+          credits: [{ accountName: "Revenue", amount: Amount.fromMajor(999) }],
+        }),
+      ).rejects.toMatchObject({
+        name: "IdempotencyConflictError",
+        key: "req-123",
+        existingEntryId: first.id,
+      });
+      // The conflicting post must not have written anything.
+      expect(await ledger.allEntries()).toHaveLength(1);
+    });
+
+    it("validates the payload even when the key was already used", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+      await ledger.postEntry({
+        idempotencyKey: "req-123",
+        description: "Sale",
+        date: "2026-01-05",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
+        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
+      });
+      // An unbalanced "retry" is invalid input, not a dedup hit.
+      await expect(
+        ledger.postEntry({
+          idempotencyKey: "req-123",
+          description: "Sale",
+          date: "2026-01-05",
+          debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
+          credits: [{ accountName: "Revenue", amount: Amount.fromMajor(99) }],
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
     });
 
     it("posts independently when no key is supplied", async () => {

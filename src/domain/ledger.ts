@@ -3,10 +3,11 @@ import { type Account, aggregateBalances, computeBalance } from "./account";
 import {
   type AmountRecord,
   buildEntry,
+  computeEntryFingerprint,
   type Entry,
   type EntryPayload,
 } from "./entry";
-import { ValidationError } from "./errors";
+import { IdempotencyConflictError, ValidationError } from "./errors";
 import {
   type CreateAccountInput,
   createAccountSchema,
@@ -64,15 +65,6 @@ export class Ledger {
    * on failure with a flat list of path-tagged issues.
    */
   async postEntry(input: EntryInput): Promise<Entry> {
-    // Exactly-once posting: if a client-supplied idempotency key is present and
-    // a matching entry was already persisted, return it instead of re-posting.
-    // This guards against retries in a Durable Object (network replays or
-    // re-execution after eviction) that would otherwise create a silent duplicate.
-    if (input.idempotencyKey) {
-      const existing = await this.repo.getEntryByKey(input.idempotencyKey);
-      if (existing) return existing;
-    }
-
     const names = new Set<string>();
     for (const a of [...input.debits, ...input.credits]) {
       if (a.accountName) names.add(a.accountName);
@@ -83,10 +75,36 @@ export class Ledger {
       if (acc) accountMap.set(name, acc);
     }
 
+    // Validate FIRST — an invalid payload is invalid input, never a dedup hit.
     const payload: EntryPayload = buildEntry(
       input,
       (name) => accountMap.get(name) ?? null,
     );
+
+    // Exactly-once posting: a byte-identical retry (network replay, DO
+    // re-execution after eviction) returns the already-persisted entry. The
+    // stored payload fingerprint distinguishes that from a key *collision* —
+    // the same key carrying different business content — which must fail
+    // loudly instead of silently dropping the second transaction.
+    if (payload.idempotencyKey) {
+      const fingerprint = await computeEntryFingerprint(payload);
+      const keyRecord = await this.repo.getEntryKeyRecord(
+        payload.idempotencyKey,
+      );
+      if (keyRecord) {
+        if (keyRecord.payloadHash && keyRecord.payloadHash !== fingerprint) {
+          throw new IdempotencyConflictError(
+            payload.idempotencyKey,
+            keyRecord.entryId,
+          );
+        }
+        // Matching fingerprint (or a legacy row with no recorded hash):
+        // genuine retry, return the original.
+        const existing = await this.repo.getEntry(keyRecord.entryId);
+        if (existing) return existing;
+      }
+    }
+
     return this.repo.insertEntry(payload);
   }
 

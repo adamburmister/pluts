@@ -165,6 +165,39 @@ export function buildEntry(
   return payload;
 }
 
+/**
+ * Compute a stable fingerprint of an entry payload's business content:
+ * SHA-256 (hex) over description, date, and the ordered debit/credit lines
+ * (account id + minor units). Stored beside the idempotency key so a retry
+ * can be told apart from a key collision: identical fingerprint => genuine
+ * retry (return the original entry); different fingerprint => client bug
+ * (throw {@link IdempotencyConflictError} rather than silently dropping the
+ * second transaction).
+ */
+export async function computeEntryFingerprint(
+  payload: EntryPayload,
+): Promise<string> {
+  const canonical = JSON.stringify({
+    description: payload.description,
+    date: payload.date,
+    debits: payload.debits.map((l) => [
+      l.account.id,
+      l.amount.minor.toString(),
+    ]),
+    credits: payload.credits.map((l) => [
+      l.account.id,
+      l.amount.minor.toString(),
+    ]),
+  });
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonical),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 /** Build {@link AmountRecord}s from a payload, assigning fresh ids. */
 export function amountsFromPayload(
   payload: EntryPayload,
