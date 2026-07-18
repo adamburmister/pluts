@@ -71,6 +71,15 @@ export const SCHEMA_STATEMENTS: string[] = [
   `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_update
   BEFORE UPDATE OF id, description, date, posted_at ON pluts_entries
   BEGIN SELECT RAISE(ABORT, 'pluts: ledger entries are append-only'); END`,
+  // The trigger above is column-scoped so future migration columns stay
+  // backfillable — but UPDATE OF never matches a rowid assignment, so
+  // "UPDATE ... SET rowid = -1" slipped past it and poisoned the
+  // auto-rowid sentinel the no_replace guards rely on. This companion
+  // trigger fires on every UPDATE and aborts only when the rowid changes.
+  `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_rowid_update
+  BEFORE UPDATE ON pluts_entries
+  WHEN NEW.rowid != OLD.rowid
+  BEGIN SELECT RAISE(ABORT, 'pluts: ledger entries are append-only'); END`,
   `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_delete
   BEFORE DELETE ON pluts_entries
   BEGIN SELECT RAISE(ABORT, 'pluts: ledger entries are append-only'); END`,

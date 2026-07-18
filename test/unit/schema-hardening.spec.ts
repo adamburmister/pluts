@@ -273,6 +273,27 @@ describe("schema hardening", () => {
       }
     });
 
+    // The entries UPDATE trigger is column-scoped (so future migration
+    // columns stay backfillable), which left rowid assignments unguarded:
+    // UPDATE ... SET rowid = -1 bypassed every trigger, and the poisoned
+    // sentinel then bricked all ordinary inserts. Amounts and entry_keys
+    // use bare UPDATE triggers and were already covered.
+    it("blocks rowid-only UPDATEs on entries", () => {
+      expect(() =>
+        db
+          .prepare("UPDATE pluts_entries SET rowid = -1 WHERE id = 'ent-1'")
+          .run(),
+      ).toThrow(/append-only/);
+      // Ordinary inserts must still work (the sentinel was not poisoned).
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES ('ent-rowid-after', 'ok', '2026-01-07', '2026-01-07T10:00:00Z')",
+          )
+          .run(),
+      ).not.toThrow();
+    });
+
     // The rowid guards treat NEW.rowid = -1 as "auto-assigned" — so a real
     // row stored at rowid -1 by raw SQL would make that sentinel match and
     // abort every ordinary insert thereafter. Negative rowids must therefore
