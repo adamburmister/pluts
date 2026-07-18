@@ -80,6 +80,14 @@ export const SCHEMA_STATEMENTS: string[] = [
  */
 export const SCHEMA_VERSION = 1;
 
+/**
+ * The scale every ledger provisioned before scale stamping existed was
+ * written at. The meta table shipped while SCALE was 2, so an unstamped
+ * database's integers always denominate scale 2 — regardless of what SCALE
+ * this build was compiled with.
+ */
+const LEGACY_UNSTAMPED_SCALE = 2;
+
 /** Metadata describing a provisioned ledger database. */
 export interface LedgerMeta {
   /** ISO-4217-style currency code the ledger's amounts denominate, if stamped. */
@@ -179,6 +187,22 @@ export function migrate(
       `Ledger was written at scale ${meta.scale} but this build uses scale ${SCALE}; ` +
         "run a rescale migration on stored minor units before opening it",
     );
+  }
+  // An unstamped ledger predates the meta table, which shipped while SCALE
+  // was LEGACY_UNSTAMPED_SCALE — its stored integers denominate that scale,
+  // not whatever this build was compiled with. Stamping a raised SCALE over
+  // existing amounts would silently reinterpret them; refuse until an
+  // explicit rescale migration runs. Empty ledgers hold no amounts to
+  // misread and stamp the current scale directly.
+  if (stampedScale.length === 0 && SCALE !== LEGACY_UNSTAMPED_SCALE) {
+    const hasAmounts =
+      sql.exec("SELECT 1 FROM pluts_amounts LIMIT 1").toArray().length > 0;
+    if (hasAmounts) {
+      throw new RepositoryError(
+        `Ledger has amounts recorded before scale stamping existed (scale ${LEGACY_UNSTAMPED_SCALE}) ` +
+          `but this build uses scale ${SCALE}; run a rescale migration on stored minor units before opening it`,
+      );
+    }
   }
   stamp("scale", String(SCALE));
 
