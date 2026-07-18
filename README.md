@@ -16,6 +16,12 @@ At public input boundaries (entry amounts, account creation), amounts accept `nu
 
 To support higher-precision currencies in the future (e.g. 3 decimals for KWD, 8 for crypto), raise `SCALE` and run a rescale migration on stored minor units. The rest of the domain is scale-agnostic.
 
+Pro-rata splits use `Amount#allocate(weights, { remainder? })` — exact bigint math whose results always sum back to the original, with an explicit remainder policy (`"largest"` remainder by default, or `"first"`/`"last"`). Splitting $10.00 three ways yields `3.34, 3.33, 3.33` — never do this math in floats and hope the entry balances:
+
+```ts
+const [a, b, c] = Amount.fromMajor("10.00").allocate([1, 1, 1]);
+```
+
 ### Accounts
 
 The five account types are represented by the `AccountType` enum. Balance logic is driven by `normalCreditBalance(type)` plus the account's `contra` flag:
@@ -81,8 +87,9 @@ Pluts's production persistence is implemented against Cloudflare Durable Objects
 If you want to run Pluts outside of Cloudflare (or support additional backends), implement the `Repository` interface in `src/db/repository.ts` for your chosen storage. Key guidance:
 
 - Implement the same transactional semantics for `insertEntry` (all row inserts + idempotency-key insert must be atomic). Use your DB's transactions.
+- Apply the schema in `SCHEMA_STATEMENTS` (see `src/db/schema.ts`) or translate it to your DB's DDL before first use. Note that the append-only/validation trigger statements contain internal semicolons — apply statements one at a time (as `migrate()` does); do not split `SCHEMA_SQL` naively on `;`.
+- Plain SQLite defaults to `PRAGMA foreign_keys = OFF` — enable it per connection (`better-sqlite3`, `node:sqlite`) or the schema's FK constraints silently won't be enforced. Durable Object storage enforces them already.
 - Call `assertBalanced(payload)` (exported from `pluts`) at the top of `insertEntry` before writing anything. `EntryPayload` is structurally constructible, so the double-entry invariant must be enforced at the persistence seam, not only in the `Ledger` facade.
-- Apply the schema in `SCHEMA_STATEMENTS` (see `src/db/schema.ts`) or translate it to your DB's DDL before first use.
 - Persist amounts as integer minor units (the library uses `bigint` internally; convert to/from your driver's numeric type safely).
 - Ensure `getAccountByName`, `sumByType`, `sumCredits`/`sumDebits`, and `amountsForAccount` match the SQL semantics expected by the domain code.
 
@@ -175,9 +182,11 @@ await ledger.postEntry({
 await ledger.accountBalance(cash); // per-account
 await ledger.balanceByType(AccountType.Asset); // per-type
 await ledger.trialBalance(); // should be zero
+await ledger.trialBalanceReport("2024-12-31"); // classic listing: per-account debit/credit columns + totals
 
-// Reports
-await ledger.balanceSheet(); // { assets, liabilities, equity, balanced }
+// Reports. Balance sheet and trial balance are point-in-time (asOf);
+// the income statement is a period (flow) statement and takes a range.
+await ledger.balanceSheet("2024-12-31"); // { assets, liabilities, equity, balanced }
 await ledger.incomeStatement({ fromDate: "2024-01-01" }); // { revenue, expenses, netIncome }
 ```
 
@@ -228,7 +237,7 @@ Rules (enforced via Zod schema + `superRefine`):
 
 - `description` required (non-empty)
 - at least one debit and one credit
-- every amount requires an account and a non-negative value
+- every amount requires an account and a strictly positive value (a $0.00 leg attaches an account to an entry that didn't touch it)
 - sum(debits) === sum(credits) (exact)
 - `date` defaults to today if omitted
 - account names must resolve to existing accounts
@@ -255,15 +264,13 @@ Pluts is a library; the runnable Durable Object app that consumes it lives in [p
 
 ### Migrations
 
-The schema is defined as idempotent DDL in `src/db/schema.ts` (the `SCHEMA_STATEMENTS` array). To change the schema, edit that file and add/adjust the `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` statements. `migrate(ctx.storage.sql)` applies them on every cold start; existing objects are skipped, so there is no separate "generate migrations" step or tracking table.
+The schema is defined as idempotent DDL in `src/db/schema.ts` (the `SCHEMA_STATEMENTS` array). `migrate(ctx.storage.sql)` applies it on every cold start, then stamps the ledger's self-description into `pluts_ledger_meta`:
 
-Fresh-DBs only: if you change a `CREATE TABLE` definition in a way that conflicts with an already-provisioned DO SQLite database, reset the local DO storage so it is recreated cleanly:
+- `scale` — the decimal scale the stored minor units were written at. If a ledger stamped at one scale is opened by a build compiled at another, `migrate` throws instead of silently reinterpreting every stored amount; changing `SCALE` requires an explicit rescale migration.
+- `schema_version` — the `SCHEMA_VERSION` constant. Databases provisioned before the meta table existed are treated as version 0 and stamped on their next migrate. Future incompatible schema changes bump the constant and add explicit upgrade steps to `migrate` — ledger data is financial record; "reset the database" is not a migration strategy.
+- `currency` (optional) — pass `migrate(sql, { currency: "NZD" })` to record what the ledger's amounts denominate. Re-opening with a different currency throws, so a routing bug that sends EUR postings to a USD ledger fails at provision time instead of silently "balancing". Read it back with `getLedgerMeta(sql)`.
 
-```sh
-rm -rf ../ledger/.wrangler/state/v3/do
-```
-
-The next `npm run dev` in `ledger` provisions a fresh DO and `migrate` applies the schema cleanly.
+During local development only, a scratch DO database can still be reset by deleting `.wrangler/state/v3/do` in the consuming app.
 
 ## License
 

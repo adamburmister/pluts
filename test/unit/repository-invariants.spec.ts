@@ -60,6 +60,25 @@ describe("assertBalanced", () => {
     expect(() => assertBalanced(p)).toThrow(ValidationError);
   });
 
+  // F-13's "every line must move money" must hold at the persistence seam
+  // too: a balanced payload with an extra zero leg passed only the facade's
+  // schema, so hand-constructed payloads could persist zero lines.
+  it("rejects a balanced payload containing a zero-amount line", () => {
+    const p = payload({
+      debits: [
+        { account: acct("Cash"), amount: Amount.fromMajor(10) },
+        { account: acct("Bank"), amount: Amount.zero() },
+      ],
+      credits: [
+        {
+          account: acct("Rev", AccountType.Revenue),
+          amount: Amount.fromMajor(10),
+        },
+      ],
+    });
+    expect(() => assertBalanced(p)).toThrow(ValidationError);
+  });
+
   it("rejects an all-zero payload", () => {
     const p = payload({
       debits: [{ account: acct("Cash"), amount: Amount.zero() }],

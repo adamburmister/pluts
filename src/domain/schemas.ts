@@ -22,6 +22,12 @@ export const amountSchema = z
     z.number().finite().nonnegative(),
     z.string().regex(/^\d+(\.\d+)?$/),
   ])
+  .transform((v) => (v instanceof Amount ? v : Amount.fromMajor(v)))
+  // Every line must move money: a $0.00 leg attaches an account to an entry
+  // that didn't touch it — noise an accountant would query (F-13).
+  .refine((a) => a.isPositive(), {
+    message: "must be greater than zero",
+  })
   .transform((v, ctx) => {
     if (v instanceof Amount) return v;
     // Amount.fromMajor throws RangeError on values its digit parser cannot

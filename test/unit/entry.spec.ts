@@ -129,6 +129,27 @@ describe("buildEntry", () => {
     ).toBe(true);
   });
 
+  // F-13: a $0.00 leg attaches an account to an entry that didn't touch it —
+  // noise an accountant would query. The README already claimed "amount
+  // positivity"; the schema only enforced non-negativity.
+  it("rejects a zero-amount line", () => {
+    const msgs = issuesFor(
+      baseInput({
+        debits: [
+          { account: acct("Cash"), amount: Amount.fromMajor(10) },
+          { account: acct("Bank"), amount: Amount.zero() },
+        ],
+        credits: [
+          {
+            account: acct("Rev", AccountType.Revenue),
+            amount: Amount.fromMajor(10),
+          },
+        ],
+      }),
+    );
+    expect(msgs.length).toBeGreaterThan(0);
+  });
+
   it("accepts multiple credits summing to the debit total", () => {
     const payload = buildEntry(
       baseInput({
