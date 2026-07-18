@@ -323,7 +323,8 @@ describe("Ledger over the production repository on real DO SQLite", () => {
         type: AccountType.Revenue,
       });
 
-      // Hand-constructed unbalanced payload straight at the repository seam.
+      // Guard-path sanity: an unbalanced payload is rejected by
+      // assertBalanced BEFORE the transaction opens — nothing written.
       await expect(
         repo.insertEntry({
           description: "unbalanced",
@@ -333,12 +334,48 @@ describe("Ledger over the production repository on real DO SQLite", () => {
         }),
       ).rejects.toBeInstanceOf(ValidationError);
 
+      // Transaction path: a BALANCED payload that fails INSIDE
+      // transactionSync. Post once with a key, then hit the repository
+      // directly (bypassing Ledger's dedup pre-check) with the same key and
+      // different content: the entry and amount INSERTs succeed inside the
+      // transaction, then the key INSERT hits the unique constraint — the
+      // whole posting must roll back, leaving only the original rows.
+      const original = await repo.insertEntry({
+        idempotencyKey: "atomic-key",
+        description: "original",
+        date: "2026-01-05",
+        debits: [{ account: cash, amount: Amount.fromMajor(10) }],
+        credits: [{ account: rev, amount: Amount.fromMajor(10) }],
+      });
+      await expect(
+        repo.insertEntry({
+          idempotencyKey: "atomic-key",
+          description: "collides inside the transaction",
+          date: "2026-01-06",
+          debits: [{ account: cash, amount: Amount.fromMajor(99) }],
+          credits: [{ account: rev, amount: Amount.fromMajor(99) }],
+        }),
+      ).rejects.toMatchObject({
+        name: "IdempotencyConflictError",
+        existingEntryId: original.id,
+      });
+
+      // Only the original posting survives: its entry, its two amounts, its
+      // key row. The collided posting's rows were written inside the
+      // transaction and must all be gone.
       const counts = sql
         .exec(
-          "SELECT (SELECT COUNT(*) FROM pluts_entries) AS e, (SELECT COUNT(*) FROM pluts_amounts) AS a",
+          "SELECT (SELECT COUNT(*) FROM pluts_entries) AS e, (SELECT COUNT(*) FROM pluts_amounts) AS a, (SELECT COUNT(*) FROM pluts_entry_keys) AS k",
         )
-        .one() as { e: number; a: number };
-      expect(counts).toEqual({ e: 0, a: 0 });
+        .one() as { e: number; a: number; k: number };
+      expect(counts).toEqual({ e: 1, a: 2, k: 1 });
+      expect(
+        sql
+          .exec(
+            "SELECT COUNT(*) AS n FROM pluts_entries WHERE description = 'collides inside the transaction'",
+          )
+          .one(),
+      ).toEqual({ n: 0 });
     });
   });
 });
