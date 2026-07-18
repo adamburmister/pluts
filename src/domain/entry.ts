@@ -87,7 +87,7 @@ export class Entry {
      * Null only for domain objects constructed outside a repository.
      */
     readonly seq: number | null = null,
-  ) {}
+  ) {
     // `readonly T[]` is compile-time only; freeze so a runtime push on a
     // posted entry throws instead of silently mutating the object.
     Object.freeze(debitAmounts);
