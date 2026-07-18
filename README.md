@@ -100,6 +100,16 @@ Examples:
 
 Because the domain is decoupled via `Repository` and tests exercise the domain with an in-memory repository, porting is limited to a single new repository adapter — the rest of Pluts should work unchanged.
 
+### Durable Object SQLite constraints
+
+Verified against the real runtime by the workerd integration suite (`test/integration/`); keep these in mind when touching schema or repository code:
+
+- **`SqlStorage` does not bind `bigint`** — every amount crosses an IEEE 754 `number` boundary at the storage seam (hence `toStorageInt`/`fromStorageInt`). The schema's `amount <= 9007199254740991` CHECK/trigger still matters: an oversized value can't be *bound*, but raw SQL can write one as a literal.
+- **`PRAGMA user_version` is not supported** in DO storage — schema versioning must live in a table, which is what `pluts_ledger_meta.schema_version` does. `PRAGMA table_info` *is* allowed (the migrations rely on it).
+- **`SqlStorage` handles cannot cross Durable Object contexts** — workerd throws "Cannot perform I/O on behalf of a different Durable Object". Never cache a `sql` handle outside the owning DO; in tests, keep all use inside a single `runInDurableObject` callback.
+- **Everything the schema uses is authorizer-approved**: triggers with `RAISE(ABORT)`/`WHEN`, `date()` in CHECK constraints, `sqlite_master` reads, explicit rowid writes, `ON CONFLICT DO UPDATE`. If a future change reaches for something workerd rejects, the integration suite fails in CI.
+- **node:sqlite is looser than workerd in one trap-prone way**: unbound placeholders silently bind as NULL there, so a test fake that drops binds can stay green while doing nothing. The workerd suite exists to catch exactly this class of gap.
+
 ### Tenancy
 
 Tenancy is intentionally **not** included. Multi-tenancy is provided by Durable Object isolation: one DO instance = one ledger. Account names are unique within a ledger.
