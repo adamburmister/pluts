@@ -32,7 +32,11 @@ export const SCHEMA_STATEMENTS: string[] = [
   created_at TEXT NOT NULL,
   CONSTRAINT pluts_accounts_type_check CHECK (type IN ('Asset','Liability','Equity','Revenue','Expense'))
 )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS pluts_accounts_name_type_idx ON pluts_accounts (name, type)`,
+  // Account names are unique per ledger across ALL types. A (name, type)
+  // uniqueness would let two accounts share a name (e.g. an Asset "Cash" and a
+  // Liability "Cash"), making name-based entry posting ambiguous — the amount
+  // would land on whichever row the lookup happened to return first.
+  `CREATE UNIQUE INDEX IF NOT EXISTS pluts_accounts_name_idx ON pluts_accounts (name)`,
   `CREATE INDEX IF NOT EXISTS pluts_accounts_type_idx ON pluts_accounts (type, name)`,
   `CREATE TABLE IF NOT EXISTS pluts_entries (
   id TEXT PRIMARY KEY NOT NULL,

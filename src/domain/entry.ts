@@ -1,5 +1,11 @@
 import type { Account } from "./account.js";
 import type { Amount } from "./amount.js";
+import {
+  type AmountLineDTO,
+  type EntryDTO,
+  toAmountLineDTO,
+  toEntryDTO,
+} from "./dto.js";
 import { ValidationError, type ValidationIssue } from "./errors.js";
 import {
   type AmountLine,
@@ -43,14 +49,12 @@ export class AmountRecord {
     readonly entryId: string,
   ) {}
 
-  toJSON(): Record<string, unknown> {
-    return {
-      id: this.id,
-      kind: this.kind,
-      accountId: this.account.id,
-      amount: this.amount.toMajor(),
-      entryId: this.entryId,
-    };
+  /**
+   * Serialize via the DTO mapper so there is exactly one wire shape for a
+   * line, whether it is stringified alone or inside an {@link Entry}.
+   */
+  toJSON(): AmountLineDTO {
+    return toAmountLineDTO(this);
   }
 }
 
@@ -69,28 +73,68 @@ export class Entry {
     readonly debitAmounts: readonly AmountRecord[],
     readonly creditAmounts: readonly AmountRecord[],
     readonly postedAt: string,
-  ) {}
+  ) {
+    // `readonly T[]` is compile-time only; freeze so a runtime push on a
+    // posted entry throws instead of silently mutating the object.
+    Object.freeze(debitAmounts);
+    Object.freeze(creditAmounts);
+  }
 
-  toJSON(): Record<string, unknown> {
-    return {
-      id: this.id,
-      description: this.description,
-      date: this.date,
-      debitAmounts: this.debitAmounts.map((d) => ({
-        ...d,
-        amount: d.amount.toMajor(),
-      })),
-      creditAmounts: this.creditAmounts.map((c) => ({
-        ...c,
-        amount: c.amount.toMajor(),
-      })),
-      postedAt: this.postedAt,
-    };
+  /** Serialize via the DTO mapper — one wire shape (see {@link toEntryDTO}). */
+  toJSON(): EntryDTO {
+    return toEntryDTO(this);
   }
 }
 
 function newId(): string {
   return crypto.randomUUID();
+}
+
+/**
+ * Assert the double-entry invariant on a payload about to be persisted:
+ * at least one debit, at least one credit, sum(debits) === sum(credits),
+ * and a non-zero total. Throws {@link ValidationError} otherwise.
+ *
+ * {@link buildEntry} already enforces this via the input schema, but
+ * {@link EntryPayload} is a structural interface — nothing stops a caller
+ * (or a third-party Repository port) from hand-constructing an unbalanced
+ * payload and passing it straight to `insertEntry`. Every `Repository`
+ * implementation MUST call this before persisting; the invariant belongs to
+ * the persistence seam, not just the input facade.
+ */
+export function assertBalanced(payload: EntryPayload): void {
+  const issues: ValidationIssue[] = [];
+  if (payload.debits.length === 0) {
+    issues.push({
+      path: ["debits"],
+      message: "Entry must have at least one debit amount",
+    });
+  }
+  if (payload.credits.length === 0) {
+    issues.push({
+      path: ["credits"],
+      message: "Entry must have at least one credit amount",
+    });
+  }
+  const debitSum = payload.debits.reduce((acc, l) => acc + l.amount.minor, 0n);
+  const creditSum = payload.credits.reduce(
+    (acc, l) => acc + l.amount.minor,
+    0n,
+  );
+  if (debitSum !== creditSum) {
+    issues.push({
+      path: [],
+      message: "The credit and debit amounts are not equal",
+    });
+  } else if (debitSum === 0n && issues.length === 0) {
+    issues.push({
+      path: [],
+      message: "Entry amounts must be greater than zero",
+    });
+  }
+  if (issues.length > 0) {
+    throw new ValidationError(issues, "Unbalanced entry");
+  }
 }
 
 /**

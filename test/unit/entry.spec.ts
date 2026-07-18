@@ -163,6 +163,29 @@ describe("buildEntry", () => {
     expect(payload.date).toBe("2024-01-15");
   });
 
+  // F-02: dates are compared lexicographically in range queries, so anything
+  // other than strict zero-padded yyyy-mm-dd silently falls out of (or into)
+  // the wrong reporting period. Malformed dates must be rejected, not stored.
+  it("rejects a non-zero-padded date string", () => {
+    const msgs = issuesFor(baseInput({ date: "2026-1-5" }));
+    expect(msgs.some((m) => m.path.includes("date"))).toBe(true);
+  });
+
+  it("rejects a non-date string", () => {
+    const msgs = issuesFor(baseInput({ date: "not-a-date" }));
+    expect(msgs.some((m) => m.path.includes("date"))).toBe(true);
+  });
+
+  it("rejects an impossible calendar date", () => {
+    const msgs = issuesFor(baseInput({ date: "2026-02-30" }));
+    expect(msgs.some((m) => m.path.includes("date"))).toBe(true);
+  });
+
+  it("rejects an invalid Date object", () => {
+    const msgs = issuesFor(baseInput({ date: new Date("garbage") }));
+    expect(msgs.some((m) => m.path.includes("date"))).toBe(true);
+  });
+
   it("resolves accounts by name via the resolver", () => {
     const cash = acct("Cash");
     const rev = acct("Revenue", AccountType.Revenue);
@@ -197,6 +220,22 @@ describe("buildEntry", () => {
       () => null,
     );
     expect(msgs.some((m) => m.message === 'Account "Ghost" not found')).toBe(
+      true,
+    );
+  });
+
+  // F-12: 1e-7 stringifies as "1e-7"; the amount transform used to throw a
+  // raw RangeError from inside Zod — a crash instead of a validation failure,
+  // violating the "safeParse must never throw" doctrine.
+  it("fails cleanly (not crashes) for scientific-notation number amounts", () => {
+    const msgs = issuesFor({
+      description: "x",
+      debits: [{ account: acct("Cash"), amount: 1e-7 }],
+      credits: [{ account: acct("Rev", AccountType.Revenue), amount: 1e-7 }],
+    });
+    // 1e-7 rounds to $0.00 at scale 2; the entry is rejected as zero-total —
+    // via ValidationError issues, never a raw throw.
+    expect(msgs.some((m) => m.message.includes("greater than zero"))).toBe(
       true,
     );
   });

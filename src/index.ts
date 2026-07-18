@@ -7,7 +7,11 @@ export {
   SCHEMA_STATEMENTS,
   SCHEMA_VERSION,
 } from "./db/schema.js";
-export { SqlStorageRepository } from "./db/sqlite-storage-repository.js";
+export {
+  fromStorageInt,
+  SqlStorageRepository,
+  toStorageInt,
+} from "./db/sqlite-storage-repository.js";
 export {
   Account,
   aggregateBalances,
@@ -26,6 +30,7 @@ export {
   type AmountKind,
   AmountRecord,
   amountsFromPayload,
+  assertBalanced,
   buildEntry,
   Entry,
   type EntryPayload,
@@ -55,6 +60,7 @@ export {
   ACCOUNT_TYPES,
   AccountType,
   type DateRange,
+  isValidISODate,
   normalCreditBalance,
   toDateISO,
 } from "./domain/types.js";
