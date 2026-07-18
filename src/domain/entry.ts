@@ -33,6 +33,13 @@ export interface EntryPayload {
   readonly idempotencyKey?: string;
   readonly description: string;
   readonly date: string;
+  /**
+   * True when {@link date} was defaulted to "today" because the caller
+   * omitted it. Excludes the resolved date from the idempotency fingerprint
+   * so a date-less retry still matches after a UTC day rollover. Not
+   * persisted.
+   */
+  readonly dateWasDefaulted?: true;
   readonly debits: readonly ResolvedAmountLine[];
   readonly credits: readonly ResolvedAmountLine[];
 }
@@ -224,8 +231,46 @@ export function buildEntry(
     debits: resolvedDebits,
     credits: resolvedCredits,
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(parsed.data.date === undefined ? { dateWasDefaulted: true } : {}),
   };
   return payload;
+}
+
+/**
+ * Compute a stable fingerprint of an entry payload's business content:
+ * SHA-256 (hex) over description, date, and the ordered debit/credit lines
+ * (account id + minor units). Stored beside the idempotency key so a retry
+ * can be told apart from a key collision: identical fingerprint => genuine
+ * retry (return the original entry); different fingerprint => client bug
+ * (throw {@link IdempotencyConflictError} rather than silently dropping the
+ * second transaction).
+ *
+ * The date is hashed as the *caller* supplied it — `null` when it was
+ * defaulted — so a date-less retry fingerprints identically even after a UTC
+ * day rollover.
+ */
+export async function computeEntryFingerprint(
+  payload: EntryPayload,
+): Promise<string> {
+  const canonical = JSON.stringify({
+    description: payload.description,
+    date: payload.dateWasDefaulted ? null : payload.date,
+    debits: payload.debits.map((l) => [
+      l.account.id,
+      l.amount.minor.toString(),
+    ]),
+    credits: payload.credits.map((l) => [
+      l.account.id,
+      l.amount.minor.toString(),
+    ]),
+  });
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonical),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 /** Build {@link AmountRecord}s from a payload, assigning fresh ids. */

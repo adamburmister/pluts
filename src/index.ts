@@ -29,11 +29,13 @@ export {
   amountsFromPayload,
   assertBalanced,
   buildEntry,
+  computeEntryFingerprint,
   Entry,
   type EntryPayload,
   type ResolvedAmountLine,
 } from "./domain/entry.js";
 export {
+  IdempotencyConflictError,
   RepositoryError,
   ValidationError,
   type ValidationIssue,

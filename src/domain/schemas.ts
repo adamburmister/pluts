@@ -27,6 +27,22 @@ export const amountSchema = z
   // that didn't touch it — noise an accountant would query (F-13).
   .refine((a) => a.isPositive(), {
     message: "must be greater than zero",
+  })
+  .transform((v, ctx) => {
+    if (v instanceof Amount) return v;
+    // Amount.fromMajor throws RangeError on values its digit parser cannot
+    // represent (e.g. 1e21 stringifies in exponential notation). Schema
+    // transforms must never throw raw errors — report a Zod issue so callers
+    // get the promised path-tagged ValidationError.
+    try {
+      return Amount.fromMajor(v);
+    } catch (e) {
+      ctx.addIssue({
+        code: "custom",
+        message: e instanceof Error ? e.message : "Invalid amount",
+      });
+      return z.NEVER;
+    }
   });
 
 /**
