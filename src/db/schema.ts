@@ -121,12 +121,11 @@ export function migrate(sql: SqlStorage): void {
     .toArray() as Array<{ id?: unknown }>;
   for (const row of unnumbered) {
     nextSeq += 1;
-    sql
-      .exec(
-        "UPDATE pluts_entries SET seq = ? WHERE id = ?",
-        nextSeq,
-        String(row.id),
-      )
+    sql.exec(
+      "UPDATE pluts_entries SET seq = ? WHERE id = ?",
+      nextSeq,
+      String(row.id),
+    );
   }
 
   // Databases provisioned before payload fingerprints existed lack the
