@@ -43,7 +43,7 @@ export const SCHEMA_STATEMENTS: string[] = [
   description TEXT NOT NULL,
   date TEXT NOT NULL,
   posted_at TEXT NOT NULL,
-  seq INTEGER,
+  seq INTEGER NOT NULL,
   CONSTRAINT pluts_entries_date_check CHECK (date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(date) IS NOT NULL AND date(date) = date)
 )`,
   `CREATE INDEX IF NOT EXISTS pluts_entries_date_idx ON pluts_entries (date)`,
@@ -202,21 +202,12 @@ export const SCHEMA_STATEMENTS: string[] = [
 
 /**
  * Version of the Pluts schema this build of the library expects. Recorded in
- * `pluts_ledger_meta` under `schema_version` by {@link migrate}. Databases
- * provisioned before the meta table existed are treated as version 0 and
- * stamped on their next migrate (all DDL is idempotent `IF NOT EXISTS`, so
- * 0 -> 1 needs no data steps). Future incompatible changes bump this constant
- * and add explicit upgrade steps to `migrate` — never "reset the database".
+ * `pluts_ledger_meta` under `schema_version` by {@link migrate}. A freshly
+ * provisioned database reads as version 0 until its first migrate stamps it.
+ * Future incompatible changes bump this constant and add explicit upgrade
+ * steps to `migrate` — never "reset the database".
  */
 export const SCHEMA_VERSION = 1;
-
-/**
- * The scale every ledger provisioned before scale stamping existed was
- * written at. The meta table shipped while SCALE was 2, so an unstamped
- * database's integers always denominate scale 2 — regardless of what SCALE
- * this build was compiled with.
- */
-const LEGACY_UNSTAMPED_SCALE = 2;
 
 /** Metadata describing a provisioned ledger database. */
 export interface LedgerMeta {
@@ -289,70 +280,8 @@ export function migrate(
     );
   }
 
-  // Repair legacy negative rowids BEFORE creating the triggers: databases
-  // provisioned without the append-only guards can already hold rows at
-  // rowid -1 (or other negatives). The no_replace guards read NEW.rowid = -1
-  // as "auto-assigned", so such a row would make every ordinary insert abort
-  // — and once the UPDATE triggers exist, the rowid can no longer be
-  // repaired. Reassignment is safe: nothing references rowid (all FKs use
-  // the TEXT ids), and this window predates the triggers.
-  for (const table of ["pluts_entries", "pluts_amounts", "pluts_entry_keys"]) {
-    const exists = sql
-      .exec(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        table,
-      )
-      .toArray();
-    if (exists.length === 0) continue;
-    const negatives = sql
-      .exec(`SELECT rowid FROM ${table} WHERE rowid < 0 ORDER BY rowid ASC`)
-      .toArray() as Array<{ rowid?: unknown }>;
-    for (const row of negatives) {
-      sql
-        .exec(
-          `UPDATE ${table} SET rowid = (SELECT MAX(0, COALESCE(MAX(rowid), 0)) + 1 FROM ${table}) WHERE rowid = ?`,
-          Number(row.rowid),
-        )
-        .toArray();
-    }
-  }
-
-  // Legacy upgrade, before the DDL loop so the seq unique index can be
-  // created: databases provisioned before journal numbering lack the seq
-  // column (CREATE TABLE IF NOT EXISTS skips them). ALTER TABLE is not
-  // idempotent, so probe via table_info (an allowed pragma in DO SQL
-  // storage).
-  const entryColumns = sql
-    .exec("PRAGMA table_info(pluts_entries)")
-    .toArray() as Array<{ name?: unknown }>;
-  if (entryColumns.length > 0 && !entryColumns.some((c) => c.name === "seq")) {
-    sql.exec("ALTER TABLE pluts_entries ADD COLUMN seq INTEGER").toArray();
-  }
-
   for (const stmt of SCHEMA_STATEMENTS) {
     sql.exec(stmt).toArray();
-  }
-
-  // Backfill unnumbered rows on every migrate, not only when the column was
-  // just added: a deploy interrupted between ALTER TABLE and the backfill
-  // leaves NULLs behind a "column already exists" guard forever. Numbering
-  // continues from the highest existing seq (new rows may have been posted
-  // since the interruption, so rowid alone could collide) in rowid order —
-  // insertion order, which is posting order (the library never deletes).
-  const maxRow = sql
-    .exec("SELECT COALESCE(MAX(seq), 0) AS max_seq FROM pluts_entries")
-    .toArray() as Array<{ max_seq?: unknown }>;
-  let nextSeq = Number(maxRow[0]?.max_seq ?? 0);
-  const unnumbered = sql
-    .exec("SELECT id FROM pluts_entries WHERE seq IS NULL ORDER BY rowid ASC")
-    .toArray() as Array<{ id?: unknown }>;
-  for (const row of unnumbered) {
-    nextSeq += 1;
-    sql.exec(
-      "UPDATE pluts_entries SET seq = ? WHERE id = ?",
-      nextSeq,
-      String(row.id),
-    );
   }
 
   // Stamp and verify the ledger's self-description. The scale check is the
@@ -380,28 +309,11 @@ export function migrate(
         "run a rescale migration on stored minor units before opening it",
     );
   }
-  // An unstamped ledger predates the meta table, which shipped while SCALE
-  // was LEGACY_UNSTAMPED_SCALE — its stored integers denominate that scale,
-  // not whatever this build was compiled with. Stamping a raised SCALE over
-  // existing amounts would silently reinterpret them; refuse until an
-  // explicit rescale migration runs. Empty ledgers hold no amounts to
-  // misread and stamp the current scale directly.
-  if (stampedScale.length === 0 && SCALE !== LEGACY_UNSTAMPED_SCALE) {
-    const hasAmounts =
-      sql.exec("SELECT 1 FROM pluts_amounts LIMIT 1").toArray().length > 0;
-    if (hasAmounts) {
-      throw new RepositoryError(
-        `Ledger has amounts recorded before scale stamping existed (scale ${LEGACY_UNSTAMPED_SCALE}) ` +
-          `but this build uses scale ${SCALE}; run a rescale migration on stored minor units before opening it`,
-      );
-    }
-  }
   stamp("scale", String(SCALE));
 
-  // Older stored versions were upgraded by the DDL above (versioned data
-  // steps go before this stamp as the schema evolves) and are now advanced;
-  // 0 -> 1 needs no data steps because all v1 DDL is idempotent. Newer
-  // stored versions were rejected before any DDL ran.
+  // Stamp the current schema version. As the schema evolves, versioned data
+  // steps run against the DDL above before this stamp; newer stored versions
+  // were already rejected by the rollback guard before any DDL ran.
   sql
     .exec(
       "INSERT INTO pluts_ledger_meta (key, value) VALUES ('schema_version', ?) " +
@@ -421,23 +333,5 @@ export function migrate(
       );
     }
     stamp("currency", currency);
-  }
-
-  // Databases provisioned before payload fingerprints existed lack the
-  // payload_hash column (CREATE TABLE IF NOT EXISTS skips them). ALTER TABLE
-  // is not idempotent, so probe first via table_info — an allowed pragma in
-  // Durable Object SQL storage. Legacy key rows keep the '' default, which
-  // the dedup path treats as "no recorded fingerprint" (match anything), so
-  // retries of pre-upgrade postings keep working. This upgrade must run on
-  // EVERY migrate, not only when a currency is configured.
-  const keyColumns = sql
-    .exec("PRAGMA table_info(pluts_entry_keys)")
-    .toArray() as Array<{ name?: unknown }>;
-  if (!keyColumns.some((c) => c.name === "payload_hash")) {
-    sql
-      .exec(
-        "ALTER TABLE pluts_entry_keys ADD COLUMN payload_hash TEXT NOT NULL DEFAULT ''",
-      )
-      .toArray();
   }
 }

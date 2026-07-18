@@ -69,7 +69,7 @@ interface EntryRow {
   description: string;
   date: string;
   posted_at: string;
-  seq: number | null;
+  seq: number;
 }
 interface AmountRow {
   [key: string]: SqlStorageValue;
@@ -310,7 +310,7 @@ export class SqlStorageRepository implements Repository {
       if (payload.idempotencyKey && isUniqueConstraintError(e)) {
         const keyRecord = await this.getEntryKeyRecord(payload.idempotencyKey);
         if (keyRecord) {
-          if (keyRecord.payloadHash && keyRecord.payloadHash !== payloadHash) {
+          if (keyRecord.payloadHash !== payloadHash) {
             throw new IdempotencyConflictError(
               payload.idempotencyKey,
               keyRecord.entryId,
@@ -361,7 +361,7 @@ export class SqlStorageRepository implements Repository {
       .exec<{
         [key: string]: SqlStorageValue;
         entry_id: string;
-        payload_hash: string | null;
+        payload_hash: string;
       }>(
         "SELECT entry_id, payload_hash FROM pluts_entry_keys WHERE key = ?",
         key,
@@ -369,7 +369,7 @@ export class SqlStorageRepository implements Repository {
       .toArray();
     const row = rows[0];
     return row
-      ? { entryId: row.entry_id, payloadHash: row.payload_hash ?? "" }
+      ? { entryId: row.entry_id, payloadHash: row.payload_hash }
       : null;
   }
 
