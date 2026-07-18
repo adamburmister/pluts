@@ -4,6 +4,7 @@ import { Amount } from "../../src/domain/amount";
 import {
   type AmountRecord,
   amountsFromPayload,
+  assertBalanced,
   Entry,
   type EntryPayload,
 } from "../../src/domain/entry";
@@ -103,6 +104,7 @@ export class InMemoryRepository implements Repository {
   }
 
   async insertEntry(payload: EntryPayload): Promise<Entry> {
+    assertBalanced(payload);
     const id = uuid();
     const now = new Date().toISOString();
     const { debits, credits } = amountsFromPayload(payload, id);
