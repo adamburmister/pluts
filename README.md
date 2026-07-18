@@ -87,6 +87,7 @@ Pluts's production persistence is implemented against Cloudflare Durable Objects
 If you want to run Pluts outside of Cloudflare (or support additional backends), implement the `Repository` interface in `src/db/repository.ts` for your chosen storage. Key guidance:
 
 - Implement the same transactional semantics for `insertEntry` (all row inserts + idempotency-key insert must be atomic). Use your DB's transactions.
+- Call `assertBalanced(payload)` (exported from `pluts`) at the top of `insertEntry` before writing anything. `EntryPayload` is structurally constructible, so the double-entry invariant must be enforced at the persistence seam, not only in the `Ledger` facade.
 - Apply the schema in `SCHEMA_STATEMENTS` (see `src/db/schema.ts`) or translate it to your DB's DDL before first use.
 - Persist amounts as integer minor units (the library uses `bigint` internally; convert to/from your driver's numeric type safely).
 - Ensure `getAccountByName`, `sumByType`, `sumCredits`/`sumDebits`, and `amountsForAccount` match the SQL semantics expected by the domain code.
@@ -109,7 +110,7 @@ Four tables (prefixed `pluts_`), defined in `src/db/schema.ts`:
 - `pluts_accounts` — id, name, type (CHECK-constrained to the five account types), contra, created_at
 - `pluts_entries` — id, description, date, posted_at
 - `pluts_amounts` — id, type (`'credit'` | `'debit'`), account_id, entry_id, amount (integer minor units)
-- `pluts_entry_keys` — key, entry_id (idempotency-key dedup table)
+- `pluts_entry_keys` — key, entry_id, payload_hash (idempotency-key dedup table; the hash fingerprints the posted payload so a byte-identical retry returns the original entry while reusing a key with *different* content throws `IdempotencyConflictError` instead of silently dropping the second transaction)
 
 Run `migrate(ctx.storage.sql)` to apply the schema; it is idempotent and a no-op on an up-to-date database.
 

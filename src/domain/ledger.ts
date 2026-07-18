@@ -3,13 +3,15 @@ import { type Account, aggregateBalances, computeBalance } from "./account";
 import {
   type AmountRecord,
   buildEntry,
+  computeEntryFingerprint,
   type Entry,
   type EntryPayload,
 } from "./entry";
-import { ValidationError } from "./errors";
+import { IdempotencyConflictError, ValidationError } from "./errors";
 import {
   type CreateAccountInput,
   createAccountSchema,
+  dateRangeSchema,
   type EntryInput,
   toIssues,
 } from "./schemas";
@@ -43,6 +45,28 @@ export interface IncomeStatement {
 export class Ledger {
   constructor(private readonly repo: Repository) {}
 
+  /**
+   * Validate and normalize an optional date range before it reaches the
+   * repository. Range bounds filter entries by lexicographic comparison, so a
+   * malformed bound would silently mis-filter every period report (F-02).
+   * Throws {@link ValidationError} on malformed bounds.
+   */
+  private parseRange(range?: DateRange): DateRange | undefined {
+    const parsed = dateRangeSchema.safeParse(range);
+    if (!parsed.success) {
+      throw new ValidationError(
+        toIssues(parsed.error.issues),
+        "Invalid date range",
+      );
+    }
+    if (!parsed.data) return undefined;
+    const { fromDate, toDate } = parsed.data;
+    return {
+      ...(fromDate !== undefined ? { fromDate } : {}),
+      ...(toDate !== undefined ? { toDate } : {}),
+    };
+  }
+
   async createAccount(input: CreateAccountInput): Promise<Account> {
     const parsed = createAccountSchema.safeParse(input);
     if (!parsed.success) {
@@ -64,18 +88,19 @@ export class Ledger {
    * on failure with a flat list of path-tagged issues.
    */
   async postEntry(input: EntryInput): Promise<Entry> {
-    // Exactly-once posting: if a client-supplied idempotency key is present and
-    // a matching entry was already persisted, return it instead of re-posting.
-    // This guards against retries in a Durable Object (network replays or
-    // re-execution after eviction) that would otherwise create a silent duplicate.
-    if (input.idempotencyKey) {
-      const existing = await this.repo.getEntryByKey(input.idempotencyKey);
-      if (existing) return existing;
-    }
-
+    // Prefetch account names for the resolver. Tolerate malformed shapes
+    // here — buildEntry's schema parse below is the validation authority and
+    // turns them into a path-tagged ValidationError; blowing up in this scan
+    // would surface a raw TypeError instead.
     const names = new Set<string>();
-    for (const a of [...input.debits, ...input.credits]) {
-      if (a.accountName) names.add(a.accountName);
+    const lines = [
+      ...(Array.isArray(input.debits) ? input.debits : []),
+      ...(Array.isArray(input.credits) ? input.credits : []),
+    ];
+    for (const a of lines) {
+      if (typeof a?.accountName === "string" && a.accountName) {
+        names.add(a.accountName);
+      }
     }
     const accountMap = new Map<string, Account>();
     for (const name of names) {
@@ -83,10 +108,36 @@ export class Ledger {
       if (acc) accountMap.set(name, acc);
     }
 
+    // Validate FIRST — an invalid payload is invalid input, never a dedup hit.
     const payload: EntryPayload = buildEntry(
       input,
       (name) => accountMap.get(name) ?? null,
     );
+
+    // Exactly-once posting: a byte-identical retry (network replay, DO
+    // re-execution after eviction) returns the already-persisted entry. The
+    // stored payload fingerprint distinguishes that from a key *collision* —
+    // the same key carrying different business content — which must fail
+    // loudly instead of silently dropping the second transaction.
+    if (payload.idempotencyKey) {
+      const fingerprint = await computeEntryFingerprint(payload);
+      const keyRecord = await this.repo.getEntryKeyRecord(
+        payload.idempotencyKey,
+      );
+      if (keyRecord) {
+        if (keyRecord.payloadHash && keyRecord.payloadHash !== fingerprint) {
+          throw new IdempotencyConflictError(
+            payload.idempotencyKey,
+            keyRecord.entryId,
+          );
+        }
+        // Matching fingerprint (or a legacy row with no recorded hash):
+        // genuine retry, return the original.
+        const existing = await this.repo.getEntry(keyRecord.entryId);
+        if (existing) return existing;
+      }
+    }
+
     return this.repo.insertEntry(payload);
   }
 
@@ -105,15 +156,17 @@ export class Ledger {
 
   /** Balance of a single account, optionally within a date range. */
   async accountBalance(account: Account, range?: DateRange): Promise<bigint> {
+    const parsedRange = this.parseRange(range);
     const [credits, debits] = await Promise.all([
-      this.repo.sumCredits(account.id, range),
-      this.repo.sumDebits(account.id, range),
+      this.repo.sumCredits(account.id, parsedRange),
+      this.repo.sumDebits(account.id, parsedRange),
     ]);
     return computeBalance(account.type, account.contra, credits, debits);
   }
 
   /** Aggregate balance of all accounts of a type (contra accounts subtracted). */
   async balanceByType(type: AccountType, range?: DateRange): Promise<bigint> {
+    range = this.parseRange(range);
     const accounts = await this.repo.getAccountsByType(type);
     const balances = await Promise.all(
       accounts.map(async (a) => ({
@@ -132,6 +185,7 @@ export class Ledger {
    * and `incomeStatement`.
    */
   async trialBalance(range?: DateRange): Promise<bigint> {
+    range = this.parseRange(range);
     const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
       this.balanceByType(AccountType.Asset, range),
       this.balanceByType(AccountType.Liability, range),
@@ -143,6 +197,7 @@ export class Ledger {
   }
 
   async balanceSheet(range?: DateRange): Promise<BalanceSheet> {
+    range = this.parseRange(range);
     const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
       this.balanceByType(AccountType.Asset, range),
       this.balanceByType(AccountType.Liability, range),
@@ -163,6 +218,7 @@ export class Ledger {
   }
 
   async incomeStatement(range?: DateRange): Promise<IncomeStatement> {
+    range = this.parseRange(range);
     const [revenue, expenses] = await Promise.all([
       this.balanceByType(AccountType.Revenue, range),
       this.balanceByType(AccountType.Expense, range),

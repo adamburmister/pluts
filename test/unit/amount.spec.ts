@@ -26,6 +26,18 @@ describe("Amount", () => {
       expect(Amount.fromMajor(1.235).toJSON()).toBe("1.24");
     });
 
+    // F-12: Number.prototype.toString switches to scientific notation for
+    // |exp| >= 21 or <= -7; the digit regex rejected those, so an innocent
+    // tiny/huge number crashed with a raw RangeError instead of parsing.
+    it("parses numbers that stringify in scientific notation", () => {
+      expect(Amount.fromMajor(1e-7).toMajor()).toBe("0.00");
+      expect(Amount.fromMajor(5e-3).toMajor()).toBe("0.01");
+      expect(Amount.fromMajor(1.5e3).toMajor()).toBe("1500.00");
+      expect(Amount.fromMajor(1e21).toMajor()).toBe(
+        `${`1${"0".repeat(21)}`}.00`,
+      );
+    });
+
     it("rejects negative and non-finite values", () => {
       expect(() => Amount.fromMajor(-1)).toThrow();
       expect(() => Amount.fromMajor(Number.NaN)).toThrow();

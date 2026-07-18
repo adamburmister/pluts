@@ -31,6 +31,16 @@ describe("Ledger (in-memory)", () => {
       ).rejects.toBeInstanceOf(ValidationError);
     });
 
+    // F-01: names must be unique across ALL types. Two accounts named "Cash"
+    // with different types would make name-based posting ambiguous — the
+    // debit would land on whichever row the lookup returned first.
+    it("rejects duplicate names across different account types", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await expect(
+        ledger.createAccount({ name: "Cash", type: AccountType.Liability }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
     it("creates contra accounts", async () => {
       const acc = await ledger.createAccount({
         name: "Drawing",
@@ -114,6 +124,19 @@ describe("Ledger (in-memory)", () => {
       ).rejects.toMatchObject({ name: "ValidationError" });
     });
 
+    // Untyped JS can post a structurally malformed body; the name-prefetch
+    // scan must not blow up with a raw TypeError before validation runs.
+    it("throws ValidationError (not TypeError) when a lines array is missing", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await expect(
+        ledger.postEntry({
+          idempotencyKey: "req-malformed",
+          description: "Bad shape",
+          debits: [{ accountName: "Cash", amount: Amount.fromMajor(1) }],
+        } as unknown as Parameters<typeof ledger.postEntry>[0]),
+      ).rejects.toMatchObject({ name: "ValidationError" });
+    });
+
     it("defaults the date to today", async () => {
       await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
       await ledger.createAccount({
@@ -130,7 +153,7 @@ describe("Ledger (in-memory)", () => {
   });
 
   describe("idempotency", () => {
-    it("returns the previously-persisted entry for a repeated idempotency key", async () => {
+    it("returns the previously-persisted entry for an identical retry", async () => {
       await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
       await ledger.createAccount({
         name: "Revenue",
@@ -140,20 +163,78 @@ describe("Ledger (in-memory)", () => {
       const input = {
         idempotencyKey: "req-123",
         description: "Sale",
+        date: "2026-01-05",
         debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
         credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
       };
 
       const first = await ledger.postEntry(input);
-      // Retry with the same key (and a different payload) must return the same
-      // entry, never post a duplicate.
-      const retry = await ledger.postEntry({
-        ...input,
-        description: "Sale (retry)",
-      });
+      // A byte-identical retry (network replay, DO re-execution) must return
+      // the same entry, never post a duplicate.
+      const retry = await ledger.postEntry({ ...input });
       expect(retry.id).toBe(first.id);
       expect(retry.description).toBe("Sale");
       expect(await ledger.allEntries()).toHaveLength(1);
+    });
+
+    // F-05: the same key with a *different* payload is a client bug, not a
+    // retry. Silently returning the original entry means the second
+    // transaction is never recorded — a lost posting. It must fail loudly.
+    it("throws IdempotencyConflictError when the key is reused with a different payload", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+
+      const first = await ledger.postEntry({
+        idempotencyKey: "req-123",
+        description: "Sale A",
+        date: "2026-01-05",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
+        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
+      });
+
+      await expect(
+        ledger.postEntry({
+          idempotencyKey: "req-123",
+          description: "Sale B (different!)",
+          date: "2026-01-05",
+          debits: [{ accountName: "Cash", amount: Amount.fromMajor(999) }],
+          credits: [{ accountName: "Revenue", amount: Amount.fromMajor(999) }],
+        }),
+      ).rejects.toMatchObject({
+        name: "IdempotencyConflictError",
+        key: "req-123",
+        existingEntryId: first.id,
+      });
+      // The conflicting post must not have written anything.
+      expect(await ledger.allEntries()).toHaveLength(1);
+    });
+
+    it("validates the payload even when the key was already used", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+      await ledger.postEntry({
+        idempotencyKey: "req-123",
+        description: "Sale",
+        date: "2026-01-05",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
+        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
+      });
+      // An unbalanced "retry" is invalid input, not a dedup hit.
+      await expect(
+        ledger.postEntry({
+          idempotencyKey: "req-123",
+          description: "Sale",
+          date: "2026-01-05",
+          debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
+          credits: [{ accountName: "Revenue", amount: Amount.fromMajor(99) }],
+        }),
+      ).rejects.toBeInstanceOf(ValidationError);
     });
 
     it("posts independently when no key is supplied", async () => {
@@ -208,6 +289,30 @@ describe("Ledger (in-memory)", () => {
         toDate: "2024-02-01",
       });
       expect(formatAmount(partial)).toBe("100.00");
+    });
+
+    // F-02: range parameters were passed to the repository unvalidated; a
+    // malformed bound silently mis-filters every period report.
+    it("rejects malformed date-range bounds with ValidationError", async () => {
+      const cash = await ledger.createAccount({
+        name: "Cash",
+        type: AccountType.Asset,
+      });
+      await expect(
+        ledger.accountBalance(cash, { fromDate: "2024-1-5" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.balanceByType(AccountType.Asset, { toDate: "garbage" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.trialBalance({ toDate: "2024-02-30" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.balanceSheet({ fromDate: "not-a-date" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.incomeStatement({ fromDate: "2024/01/01" }),
+      ).rejects.toBeInstanceOf(ValidationError);
     });
 
     it("subtracts contra accounts in balanceByType", async () => {

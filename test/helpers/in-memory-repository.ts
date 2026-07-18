@@ -4,10 +4,15 @@ import { Amount } from "../../src/domain/amount";
 import {
   type AmountRecord,
   amountsFromPayload,
+  assertBalanced,
+  computeEntryFingerprint,
   Entry,
   type EntryPayload,
 } from "../../src/domain/entry";
-import { ValidationError } from "../../src/domain/errors";
+import {
+  IdempotencyConflictError,
+  ValidationError,
+} from "../../src/domain/errors";
 import {
   type AccountType,
   type DateRange,
@@ -48,14 +53,17 @@ export class InMemoryRepository implements Repository {
   private accounts = new Map<string, MemAccount>();
   private entries = new Map<string, MemEntry>();
   private nameIndex = new Map<string, string>();
-  private keyToEntry = new Map<string, string>();
+  private keyToEntry = new Map<
+    string,
+    { entryId: string; payloadHash: string }
+  >();
 
   async insertAccount(input: {
     name: string;
     type: AccountType;
     contra: boolean;
   }): Promise<Account> {
-    const key = `${input.name}\0${input.type}`;
+    const key = input.name;
     if (this.nameIndex.has(key)) {
       throw new ValidationError(
         [{ path: ["name"], message: "has already been taken" }],
@@ -103,6 +111,27 @@ export class InMemoryRepository implements Repository {
   }
 
   async insertEntry(payload: EntryPayload): Promise<Entry> {
+    assertBalanced(payload);
+    // Mirror the SQL repository's unique-constraint semantics on the key
+    // column: a duplicate key is either a genuine retry (same fingerprint —
+    // return the original) or a collision (different fingerprint — throw).
+    const payloadHash = payload.idempotencyKey
+      ? await computeEntryFingerprint(payload)
+      : "";
+    if (payload.idempotencyKey) {
+      const existing = this.keyToEntry.get(payload.idempotencyKey);
+      if (existing) {
+        if (existing.payloadHash && existing.payloadHash !== payloadHash) {
+          throw new IdempotencyConflictError(
+            payload.idempotencyKey,
+            existing.entryId,
+          );
+        }
+        const mem = this.entries.get(existing.entryId);
+        if (mem) return this.toEntry(mem);
+      }
+    }
+
     const id = uuid();
     const now = new Date().toISOString();
     const { debits, credits } = amountsFromPayload(payload, id);
@@ -127,8 +156,16 @@ export class InMemoryRepository implements Repository {
       creditAmounts: credits,
     };
     this.entries.set(id, memEntry);
-    if (payload.idempotencyKey) this.keyToEntry.set(payload.idempotencyKey, id);
+    if (payload.idempotencyKey) {
+      this.keyToEntry.set(payload.idempotencyKey, { entryId: id, payloadHash });
+    }
     return this.toEntry(memEntry);
+  }
+
+  async getEntryKeyRecord(
+    key: string,
+  ): Promise<{ entryId: string; payloadHash: string } | null> {
+    return this.keyToEntry.get(key) ?? null;
   }
 
   async getEntry(id: string): Promise<Entry | null> {
@@ -137,9 +174,9 @@ export class InMemoryRepository implements Repository {
   }
 
   async getEntryByKey(key: string): Promise<Entry | null> {
-    const entryId = this.keyToEntry.get(key);
-    if (!entryId) return null;
-    const mem = this.entries.get(entryId);
+    const rec = this.keyToEntry.get(key);
+    if (!rec) return null;
+    const mem = this.entries.get(rec.entryId);
     return mem ? this.toEntry(mem) : null;
   }
 
@@ -228,12 +265,14 @@ export class InMemoryRepository implements Repository {
   }
 
   private toEntry(mem: MemEntry): Entry {
+    // Copy the line arrays: returned Entry objects must not alias internal
+    // state (the SQL repository re-hydrates per query; the double must match).
     return new Entry(
       mem.id,
       mem.description,
       mem.date,
-      mem.debitAmounts,
-      mem.creditAmounts,
+      [...mem.debitAmounts],
+      [...mem.creditAmounts],
       mem.postedAt,
     );
   }

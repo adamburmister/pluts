@@ -5,12 +5,51 @@ import {
   type AmountKind,
   AmountRecord,
   amountsFromPayload,
+  assertBalanced,
+  computeEntryFingerprint,
   Entry,
   type EntryPayload,
 } from "../domain/entry";
-import { RepositoryError, ValidationError } from "../domain/errors";
+import {
+  IdempotencyConflictError,
+  RepositoryError,
+  ValidationError,
+} from "../domain/errors";
 import { type AccountType, type DateRange, toDateISO } from "../domain/types";
 import type { Repository } from "./repository";
+
+/**
+ * Bridge a minor-units `bigint` onto SqlStorage's `number` bind type.
+ *
+ * SqlStorage cannot bind bigint, so every amount crosses an IEEE 754 boundary
+ * at this seam. `Number()` does not error on precision loss — above 2^53 it
+ * silently rounds, which for a ledger means corrupted money. Fail loudly
+ * instead. (The ~2^53 ceiling is ~$90T at scale 2; it shrinks to ~90M major
+ * units at scale 8, so the guard matters if SCALE is ever raised.)
+ */
+export function toStorageInt(minor: bigint): number {
+  if (minor > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RepositoryError(
+      `Amount ${minor} minor units exceeds the exact integer range of SqlStorage (2^53 - 1)`,
+    );
+  }
+  return Number(minor);
+}
+
+/**
+ * Bridge a `number` read from SQLite (row value or SUM aggregate) back to
+ * `bigint`. A non-integer or unsafe integer here means the stored data or an
+ * aggregate crossed the exact range — silent corruption territory — or a
+ * float reached the amount column through non-library SQL. Fail loudly.
+ */
+export function fromStorageInt(value: number, context: string): bigint {
+  if (!Number.isSafeInteger(value)) {
+    throw new RepositoryError(
+      `${context}: value ${value} is not an exact integer within SqlStorage's safe range`,
+    );
+  }
+  return BigInt(value);
+}
 
 /**
  * Raw row shapes (snake_case column names, as returned by SqlStorage cursors),
@@ -193,9 +232,23 @@ export class SqlStorageRepository implements Repository {
   }
 
   async insertEntry(payload: EntryPayload): Promise<Entry> {
+    // The double-entry invariant is enforced here, at the persistence seam —
+    // not only in the Ledger facade. EntryPayload is structurally
+    // constructible, so a hand-built unbalanced payload must be rejected
+    // before any row is written.
+    assertBalanced(payload);
     const id = uuid();
     const now = new Date().toISOString();
     const { debits, credits } = amountsFromPayload(payload, id);
+    const payloadHash = payload.idempotencyKey
+      ? await computeEntryFingerprint(payload)
+      : "";
+    // Bridge amounts to storage numbers up front, so an out-of-range amount
+    // fails before the transaction opens rather than mid-write.
+    const lines = [...debits, ...credits].map((a) => ({
+      record: a,
+      storageAmount: toStorageInt(a.amount.minor),
+    }));
 
     // The entry row, every amount row, and (if present) the idempotency-key row
     // must commit atomically. transactionSync runs its callback in one SQLite
@@ -212,7 +265,7 @@ export class SqlStorageRepository implements Repository {
           )
           .toArray();
 
-        for (const a of [...debits, ...credits]) {
+        for (const { record: a, storageAmount } of lines) {
           this.sql
             .exec(
               "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES (?, ?, ?, ?, ?)",
@@ -220,7 +273,7 @@ export class SqlStorageRepository implements Repository {
               a.kind,
               a.account.id,
               id,
-              Number(a.amount.minor),
+              storageAmount,
             )
             .toArray();
         }
@@ -228,9 +281,10 @@ export class SqlStorageRepository implements Repository {
         if (payload.idempotencyKey) {
           this.sql
             .exec(
-              "INSERT INTO pluts_entry_keys (key, entry_id) VALUES (?, ?)",
+              "INSERT INTO pluts_entry_keys (key, entry_id, payload_hash) VALUES (?, ?, ?)",
               payload.idempotencyKey,
               id,
+              payloadHash,
             )
             .toArray();
         }
@@ -239,10 +293,21 @@ export class SqlStorageRepository implements Repository {
       // Two concurrent posts sharing an idempotency key can race past the
       // pre-check in Ledger.postEntry; the loser's key insert hits the unique
       // constraint and the whole transaction rolls back. Recover by returning
-      // the already-persisted entry.
+      // the already-persisted entry — but only for a genuine retry. If the
+      // stored fingerprint differs, the key was reused for different business
+      // content: surface the collision instead of silently dropping it.
       if (payload.idempotencyKey && isUniqueConstraintError(e)) {
-        const existing = await this.getEntryByKey(payload.idempotencyKey);
-        if (existing) return existing;
+        const keyRecord = await this.getEntryKeyRecord(payload.idempotencyKey);
+        if (keyRecord) {
+          if (keyRecord.payloadHash && keyRecord.payloadHash !== payloadHash) {
+            throw new IdempotencyConflictError(
+              payload.idempotencyKey,
+              keyRecord.entryId,
+            );
+          }
+          const existing = await this.getEntry(keyRecord.entryId);
+          if (existing) return existing;
+        }
       }
       throw new RepositoryError("Failed to persist entry", e);
     }
@@ -266,6 +331,25 @@ export class SqlStorageRepository implements Repository {
       .toArray();
     const row = rows[0];
     return row ? this.loadEntry(row) : null;
+  }
+
+  async getEntryKeyRecord(
+    key: string,
+  ): Promise<{ entryId: string; payloadHash: string } | null> {
+    const rows = this.sql
+      .exec<{
+        [key: string]: SqlStorageValue;
+        entry_id: string;
+        payload_hash: string | null;
+      }>(
+        "SELECT entry_id, payload_hash FROM pluts_entry_keys WHERE key = ?",
+        key,
+      )
+      .toArray();
+    const row = rows[0];
+    return row
+      ? { entryId: row.entry_id, payloadHash: row.payload_hash ?? "" }
+      : null;
   }
 
   async getEntryByKey(key: string): Promise<Entry | null> {
@@ -321,7 +405,7 @@ export class SqlStorageRepository implements Repository {
         ...rangeClause.binds,
       )
       .one();
-    return Amount.fromMinor(BigInt(row.total ?? 0));
+    return Amount.fromMinor(fromStorageInt(row.total ?? 0, "sumByType"));
   }
 
   async amountsForAccount(accountId: string): Promise<AmountRecord[]> {
@@ -365,7 +449,7 @@ export class SqlStorageRepository implements Repository {
         ...rangeClause.binds,
       )
       .one();
-    return Amount.fromMinor(BigInt(row.total ?? 0));
+    return Amount.fromMinor(fromStorageInt(row.total ?? 0, "sumAmounts"));
   }
 
   /** Builds a fully-formed immutable Entry from a row, loading its amounts. */
@@ -411,7 +495,7 @@ export class SqlStorageRepository implements Repository {
         r.id,
         r.type as AmountKind,
         account,
-        Amount.fromMinor(BigInt(r.amount)),
+        Amount.fromMinor(fromStorageInt(r.amount, `amount ${r.id}`)),
         r.entry_id,
       );
     });
