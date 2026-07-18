@@ -91,6 +91,65 @@ describe("schema hardening", () => {
         /append-only/,
       );
     });
+
+    // With SQLite's default recursive_triggers = OFF, INSERT OR REPLACE
+    // resolves a PK conflict by deleting the existing row WITHOUT firing the
+    // DELETE trigger — a silent rewrite path around append-only. BEFORE
+    // INSERT guards fire before conflict resolution and close it.
+    it("blocks INSERT OR REPLACE from rewriting a posted amount", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-1', 'debit', 'acc-1', 'ent-1', 1)",
+          )
+          .run(),
+      ).toThrow(/append-only/);
+      const row = db
+        .prepare("SELECT amount FROM pluts_amounts WHERE id = 'amt-1'")
+        .get();
+      expect(row?.amount).toBe(10000);
+    });
+
+    it("blocks INSERT OR REPLACE from rewriting a posted entry", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO pluts_entries (id, description, date, posted_at) VALUES ('ent-1', 'rewritten', '2026-01-05', '2026-01-05T10:00:00Z')",
+          )
+          .run(),
+      ).toThrow(/append-only/);
+      const row = db
+        .prepare("SELECT description FROM pluts_entries WHERE id = 'ent-1'")
+        .get();
+      expect(row?.description).toBe("Sale");
+    });
+
+    it("blocks INSERT OR REPLACE from remapping an idempotency key", () => {
+      db.prepare(
+        "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES ('ent-2', 'Other', '2026-01-06', '2026-01-06T10:00:00Z')",
+      ).run();
+      // The guard's message must still read as a unique-constraint failure:
+      // the repository's concurrent-post recovery path string-matches
+      // "UNIQUE constraint failed" on duplicate key inserts.
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO pluts_entry_keys (key, entry_id) VALUES ('key-1', 'ent-2')",
+          )
+          .run(),
+      ).toThrow(/UNIQUE constraint failed/);
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_entry_keys (key, entry_id) VALUES ('key-1', 'ent-2')",
+          )
+          .run(),
+      ).toThrow(/UNIQUE constraint failed/);
+      const row = db
+        .prepare("SELECT entry_id FROM pluts_entry_keys WHERE key = 'key-1'")
+        .get();
+      expect(row?.entry_id).toBe("ent-1");
+    });
   });
 
   describe("row validity enforcement (F-14)", () => {

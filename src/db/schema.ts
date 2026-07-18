@@ -83,6 +83,27 @@ export const SCHEMA_STATEMENTS: string[] = [
   BEFORE DELETE ON pluts_entry_keys
   BEGIN SELECT RAISE(ABORT, 'pluts: idempotency keys are append-only'); END`,
 
+  // INSERT OR REPLACE bypasses the DELETE triggers above: with SQLite's
+  // default recursive_triggers = OFF, conflict resolution deletes the
+  // existing row WITHOUT firing them, then inserts the replacement — a
+  // silent rewrite path. BEFORE INSERT triggers fire before conflict
+  // resolution, so an existence guard on the primary key closes it.
+  `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_replace
+  BEFORE INSERT ON pluts_entries
+  WHEN EXISTS (SELECT 1 FROM pluts_entries WHERE id = NEW.id)
+  BEGIN SELECT RAISE(ABORT, 'pluts: ledger entries are append-only'); END`,
+  `CREATE TRIGGER IF NOT EXISTS pluts_amounts_no_replace
+  BEFORE INSERT ON pluts_amounts
+  WHEN EXISTS (SELECT 1 FROM pluts_amounts WHERE id = NEW.id)
+  BEGIN SELECT RAISE(ABORT, 'pluts: ledger amounts are append-only'); END`,
+  // The message must still read as a unique-constraint failure: the
+  // repository's concurrent-post recovery path string-matches
+  // "UNIQUE constraint failed" when two posts race on the same key.
+  `CREATE TRIGGER IF NOT EXISTS pluts_entry_keys_no_replace
+  BEFORE INSERT ON pluts_entry_keys
+  WHEN EXISTS (SELECT 1 FROM pluts_entry_keys WHERE key = NEW.key)
+  BEGIN SELECT RAISE(ABORT, 'pluts: UNIQUE constraint failed: pluts_entry_keys.key is append-only'); END`,
+
   // ------------------------------------------------------------------
   // Row-validity enforcement (audit finding F-14).
   //
