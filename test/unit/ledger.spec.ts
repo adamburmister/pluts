@@ -210,6 +210,30 @@ describe("Ledger (in-memory)", () => {
       expect(formatAmount(partial)).toBe("100.00");
     });
 
+    // F-02: range parameters were passed to the repository unvalidated; a
+    // malformed bound silently mis-filters every period report.
+    it("rejects malformed date-range bounds with ValidationError", async () => {
+      const cash = await ledger.createAccount({
+        name: "Cash",
+        type: AccountType.Asset,
+      });
+      await expect(
+        ledger.accountBalance(cash, { fromDate: "2024-1-5" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.balanceByType(AccountType.Asset, { toDate: "garbage" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.trialBalance({ toDate: "2024-02-30" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.balanceSheet({ fromDate: "not-a-date" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.incomeStatement({ fromDate: "2024/01/01" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
     it("subtracts contra accounts in balanceByType", async () => {
       const cash = await ledger.createAccount({
         name: "Cash",
