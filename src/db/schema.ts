@@ -230,22 +230,23 @@ export function migrate(
       );
     }
     stamp("currency", currency);
+  }
 
-    // Databases provisioned before payload fingerprints existed lack the
-    // payload_hash column (CREATE TABLE IF NOT EXISTS skips them). ALTER TABLE
-    // is not idempotent, so probe first via table_info — an allowed pragma in
-    // Durable Object SQL storage. Legacy key rows keep the '' default, which
-    // the dedup path treats as "no recorded fingerprint" (match anything), so
-    // retries of pre-upgrade postings keep working.
-    const keyColumns = sql
-      .exec("PRAGMA table_info(pluts_entry_keys)")
-      .toArray() as Array<{ name?: unknown }>;
-    if (!keyColumns.some((c) => c.name === "payload_hash")) {
-      sql
-        .exec(
-          "ALTER TABLE pluts_entry_keys ADD COLUMN payload_hash TEXT NOT NULL DEFAULT ''",
-        )
-        .toArray();
-    }
+  // Databases provisioned before payload fingerprints existed lack the
+  // payload_hash column (CREATE TABLE IF NOT EXISTS skips them). ALTER TABLE
+  // is not idempotent, so probe first via table_info — an allowed pragma in
+  // Durable Object SQL storage. Legacy key rows keep the '' default, which
+  // the dedup path treats as "no recorded fingerprint" (match anything), so
+  // retries of pre-upgrade postings keep working. This upgrade must run on
+  // EVERY migrate, not only when a currency is configured.
+  const keyColumns = sql
+    .exec("PRAGMA table_info(pluts_entry_keys)")
+    .toArray() as Array<{ name?: unknown }>;
+  if (!keyColumns.some((c) => c.name === "payload_hash")) {
+    sql
+      .exec(
+        "ALTER TABLE pluts_entry_keys ADD COLUMN payload_hash TEXT NOT NULL DEFAULT ''",
+      )
+      .toArray();
   }
 }

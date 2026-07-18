@@ -11,8 +11,8 @@ import { migrate } from "../../src/db/schema";
  */
 function fakeSqlStorage(db: DatabaseSync): SqlStorage {
   return {
-    exec: (query: string) => {
-      const rows = db.prepare(query).all();
+    exec: (query: string, ...binds: Array<string | number | null>) => {
+      const rows = db.prepare(query).all(...binds);
       return { toArray: () => rows, one: () => rows[0] };
     },
   } as unknown as SqlStorage;
