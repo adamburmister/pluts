@@ -60,6 +60,7 @@ export const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS pluts_entry_keys (
   key TEXT PRIMARY KEY NOT NULL,
   entry_id TEXT NOT NULL,
+  payload_hash TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (entry_id) REFERENCES pluts_entries(id) ON UPDATE no action ON DELETE no action
 )`,
   // Self-description (audit findings F-07/F-10): the stored integers are
@@ -229,5 +230,21 @@ export function migrate(
       );
     }
     stamp("currency", currency);
+
+  // Databases provisioned before payload fingerprints existed lack the
+  // payload_hash column (CREATE TABLE IF NOT EXISTS skips them). ALTER TABLE
+  // is not idempotent, so probe first via table_info — an allowed pragma in
+  // Durable Object SQL storage. Legacy key rows keep the '' default, which
+  // the dedup path treats as "no recorded fingerprint" (match anything), so
+  // retries of pre-upgrade postings keep working.
+  const keyColumns = sql
+    .exec("PRAGMA table_info(pluts_entry_keys)")
+    .toArray() as Array<{ name?: unknown }>;
+  if (!keyColumns.some((c) => c.name === "payload_hash")) {
+    sql
+      .exec(
+        "ALTER TABLE pluts_entry_keys ADD COLUMN payload_hash TEXT NOT NULL DEFAULT ''",
+      )
+      .toArray();
   }
 }

@@ -27,6 +27,15 @@ export interface Repository {
   getEntry(id: string): Promise<Entry | null>;
   /** Look up an entry by its client-supplied idempotency key, or null if none. */
   getEntryByKey(key: string): Promise<Entry | null>;
+  /**
+   * Look up an idempotency-key record: the entry it maps to plus the payload
+   * fingerprint recorded at posting time (empty string for rows written
+   * before fingerprints existed). Used to distinguish a genuine retry
+   * (fingerprints match) from a key collision (fingerprints differ).
+   */
+  getEntryKeyRecord(
+    key: string,
+  ): Promise<{ entryId: string; payloadHash: string } | null>;
   allEntries(order?: "asc" | "desc"): Promise<Entry[]>;
 
   /** Sum of credit amounts for an account, optionally within a date range. */
