@@ -68,10 +68,14 @@ export const SCHEMA_STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS pluts_amounts_type_idx ON pluts_amounts (type)`,
   `CREATE INDEX IF NOT EXISTS pluts_amounts_account_entry_idx ON pluts_amounts (account_id, entry_id)`,
   `CREATE INDEX IF NOT EXISTS pluts_amounts_entry_account_idx ON pluts_amounts (entry_id, account_id)`,
+  // payload_hash carries the SHA-256 payload fingerprint the dedup path
+  // compares strictly — an empty hash would make the key conflict forever,
+  // even for genuine retries, so the schema refuses to store one (no
+  // DEFAULT: raw SQL omitting the column is rejected too).
   `CREATE TABLE IF NOT EXISTS pluts_entry_keys (
   key TEXT PRIMARY KEY NOT NULL,
   entry_id TEXT NOT NULL,
-  payload_hash TEXT NOT NULL DEFAULT '',
+  payload_hash TEXT NOT NULL CHECK (payload_hash != ''),
   FOREIGN KEY (entry_id) REFERENCES pluts_entries(id) ON UPDATE no action ON DELETE no action
 )`,
   // Self-description (audit findings F-07/F-10): the stored integers are

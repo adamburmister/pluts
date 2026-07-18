@@ -37,8 +37,8 @@ describe("schema hardening", () => {
       "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES (?, ?, ?, ?, ?)",
     ).run("amt-2", "credit", "acc-2", "ent-1", 10000);
     db.prepare(
-      "INSERT INTO pluts_entry_keys (key, entry_id) VALUES (?, ?)",
-    ).run("key-1", "ent-1");
+      "INSERT INTO pluts_entry_keys (key, entry_id, payload_hash) VALUES (?, ?, ?)",
+    ).run("key-1", "ent-1", "a".repeat(64));
   }
 
   beforeEach(() => {
@@ -302,7 +302,7 @@ describe("schema hardening", () => {
       for (const table of [
         "pluts_entries (rowid, id, description, date, posted_at, seq) VALUES (-1, 'ent-neg', 'x', '2026-01-05', '2026-01-05T10:00:00Z', 2)",
         "pluts_amounts (rowid, id, type, account_id, entry_id, amount) VALUES (-1, 'amt-neg', 'debit', 'acc-1', 'ent-1', 1)",
-        "pluts_entry_keys (rowid, key, entry_id) VALUES (-1, 'key-neg', 'ent-1')",
+        "pluts_entry_keys (rowid, key, entry_id, payload_hash) VALUES (-1, 'key-neg', 'ent-1', 'cafe')",
       ]) {
         expect(() => db.prepare(`INSERT INTO ${table}`).run()).toThrow(/rowid/);
       }
@@ -335,6 +335,34 @@ describe("schema hardening", () => {
             "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-max', 'debit', 'acc-1', 'ent-1', ?)",
           )
           .run(9007199254740991n),
+      ).not.toThrow();
+    });
+
+    // With the legacy empty-hash tolerance removed from the dedup path, a
+    // key row written by raw SQL without a real fingerprint would make that
+    // idempotency key conflict forever — even for genuine retries. The
+    // schema must make such rows unrepresentable.
+    it("rejects idempotency-key rows without a real payload hash", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_entry_keys (key, entry_id) VALUES ('key-raw', 'ent-1')",
+          )
+          .run(),
+      ).toThrow();
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_entry_keys (key, entry_id, payload_hash) VALUES ('key-blank', 'ent-1', '')",
+          )
+          .run(),
+      ).toThrow();
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_entry_keys (key, entry_id, payload_hash) VALUES (?, 'ent-1', ?)",
+          )
+          .run("key-hashed", "b".repeat(64)),
       ).not.toThrow();
     });
 
