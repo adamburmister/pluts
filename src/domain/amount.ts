@@ -120,6 +120,91 @@ export class Amount {
     return new Amount(this.minor * s);
   }
 
+  /**
+   * Split this amount pro-rata by integer weights, with an explicit policy
+   * for the leftover minor units. The results ALWAYS sum exactly to this
+   * amount — a split arrives pre-balanced instead of drifting by a cent and
+   * bouncing off the entry sum check.
+   *
+   * Each share starts as `floor(total * weight / weightSum)` (exact bigint
+   * math — no floats anywhere); the remaining minor units are then handed
+   * out one per line according to `remainder`:
+   * - `"largest"` (default): to the lines with the largest truncated
+   *   fractional share, ties broken by earlier position — the standard
+   *   largest-remainder method. $10.00 over [1,1,1] → 3.34, 3.33, 3.33.
+   * - `"first"` / `"last"`: to the first / last positive-weight lines.
+   *
+   * Weights must be non-negative integers with a positive sum; zero-weight
+   * lines receive 0.00 and never a remainder unit.
+   */
+  allocate(
+    weights: readonly (number | bigint)[],
+    opts: { remainder?: "first" | "last" | "largest" } = {},
+  ): Amount[] {
+    if (weights.length === 0) {
+      throw new RangeError("allocate requires at least one weight");
+    }
+    // Array.from visits holes (as undefined) where .map would skip them and
+    // propagate the hole into the result; the explicit bigint check then
+    // rejects them like any other non-integer weight.
+    const ws = Array.from(weights, (w) => {
+      if (typeof w === "number") {
+        if (!Number.isSafeInteger(w) || w < 0) {
+          throw new RangeError(
+            `allocate weights must be non-negative integers, got ${w}`,
+          );
+        }
+        return BigInt(w);
+      }
+      if (typeof w !== "bigint" || w < 0n) {
+        throw new RangeError(
+          `allocate weights must be non-negative integers, got ${String(w)}`,
+        );
+      }
+      return w;
+    });
+    const weightSum = ws.reduce((acc, w) => acc + w, 0n);
+    if (weightSum === 0n) {
+      throw new RangeError("allocate weights must sum to a positive value");
+    }
+
+    const shares = ws.map((w) => (this.minor * w) / weightSum);
+    let leftover = this.minor - shares.reduce((acc, s) => acc + s, 0n);
+
+    // Positive-weight line indices in remainder-distribution order.
+    const eligible = ws
+      .map((w, i) => ({ w, i }))
+      .filter(({ w }) => w > 0n)
+      .map(({ i }) => i);
+    let order: number[];
+    const policy = opts.remainder ?? "largest";
+    if (policy === "first") {
+      order = eligible;
+    } else if (policy === "last") {
+      order = [...eligible].reverse();
+    } else if (policy === "largest") {
+      const remainderOf = (i: number): bigint =>
+        (this.minor * (ws[i] as bigint)) % weightSum;
+      order = [...eligible].sort((a, b) => {
+        const ra = remainderOf(a);
+        const rb = remainderOf(b);
+        if (ra !== rb) return rb > ra ? 1 : -1;
+        return a - b;
+      });
+    } else {
+      // Untyped callers can pass a misspelled policy; treating it as the
+      // default would move the leftover cents while still summing correctly.
+      throw new RangeError(`Unknown remainder policy "${policy}"`);
+    }
+
+    for (const i of order) {
+      if (leftover === 0n) break;
+      shares[i] = (shares[i] as bigint) + 1n;
+      leftover -= 1n;
+    }
+    return shares.map((s) => new Amount(s));
+  }
+
   eq(other: Amount): boolean {
     return this.minor === other.minor;
   }

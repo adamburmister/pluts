@@ -16,6 +16,12 @@ At public input boundaries (entry amounts, account creation), amounts accept `nu
 
 To support higher-precision currencies in the future (e.g. 3 decimals for KWD, 8 for crypto), raise `SCALE` and run a rescale migration on stored minor units. The rest of the domain is scale-agnostic.
 
+Pro-rata splits use `Amount#allocate(weights, { remainder? })` — exact bigint math whose results always sum back to the original, with an explicit remainder policy (`"largest"` remainder by default, or `"first"`/`"last"`). Splitting $10.00 three ways yields `3.34, 3.33, 3.33` — never do this math in floats and hope the entry balances:
+
+```ts
+const [a, b, c] = Amount.fromMajor("10.00").allocate([1, 1, 1]);
+```
+
 ### Accounts
 
 The five account types are represented by the `AccountType` enum. Balance logic is driven by `normalCreditBalance(type)` plus the account's `contra` flag:
