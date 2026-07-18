@@ -124,6 +124,19 @@ describe("Ledger (in-memory)", () => {
       ).rejects.toMatchObject({ name: "ValidationError" });
     });
 
+    // Untyped JS can post a structurally malformed body; the name-prefetch
+    // scan must not blow up with a raw TypeError before validation runs.
+    it("throws ValidationError (not TypeError) when a lines array is missing", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await expect(
+        ledger.postEntry({
+          idempotencyKey: "req-malformed",
+          description: "Bad shape",
+          debits: [{ accountName: "Cash", amount: Amount.fromMajor(1) }],
+        } as unknown as Parameters<typeof ledger.postEntry>[0]),
+      ).rejects.toMatchObject({ name: "ValidationError" });
+    });
+
     it("defaults the date to today", async () => {
       await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
       await ledger.createAccount({

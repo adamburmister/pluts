@@ -88,9 +88,19 @@ export class Ledger {
    * on failure with a flat list of path-tagged issues.
    */
   async postEntry(input: EntryInput): Promise<Entry> {
+    // Prefetch account names for the resolver. Tolerate malformed shapes
+    // here — buildEntry's schema parse below is the validation authority and
+    // turns them into a path-tagged ValidationError; blowing up in this scan
+    // would surface a raw TypeError instead.
     const names = new Set<string>();
-    for (const a of [...input.debits, ...input.credits]) {
-      if (a.accountName) names.add(a.accountName);
+    const lines = [
+      ...(Array.isArray(input.debits) ? input.debits : []),
+      ...(Array.isArray(input.credits) ? input.credits : []),
+    ];
+    for (const a of lines) {
+      if (typeof a?.accountName === "string" && a.accountName) {
+        names.add(a.accountName);
+      }
     }
     const accountMap = new Map<string, Account>();
     for (const name of names) {
