@@ -91,14 +91,20 @@ export const SCHEMA_STATEMENTS: string[] = [
   // default recursive_triggers = OFF, conflict resolution deletes the
   // existing row WITHOUT firing them, then inserts the replacement — a
   // silent rewrite path. BEFORE INSERT triggers fire before conflict
-  // resolution, so an existence guard on the primary key closes it.
+  // resolution, so an existence guard on the conflict channels closes it.
+  // These are rowid tables, so REPLACE can conflict on rowid as well as the
+  // TEXT primary key; both are guarded. For auto-assigned rowids NEW.rowid
+  // is -1 in a BEFORE INSERT trigger, which matches no real row, so normal
+  // inserts pass.
   `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_replace
   BEFORE INSERT ON pluts_entries
   WHEN EXISTS (SELECT 1 FROM pluts_entries WHERE id = NEW.id)
+    OR EXISTS (SELECT 1 FROM pluts_entries WHERE rowid = NEW.rowid)
   BEGIN SELECT RAISE(ABORT, 'pluts: ledger entries are append-only'); END`,
   `CREATE TRIGGER IF NOT EXISTS pluts_amounts_no_replace
   BEFORE INSERT ON pluts_amounts
   WHEN EXISTS (SELECT 1 FROM pluts_amounts WHERE id = NEW.id)
+    OR EXISTS (SELECT 1 FROM pluts_amounts WHERE rowid = NEW.rowid)
   BEGIN SELECT RAISE(ABORT, 'pluts: ledger amounts are append-only'); END`,
   // The message must still read as a unique-constraint failure: the
   // repository's concurrent-post recovery path string-matches
@@ -106,6 +112,7 @@ export const SCHEMA_STATEMENTS: string[] = [
   `CREATE TRIGGER IF NOT EXISTS pluts_entry_keys_no_replace
   BEFORE INSERT ON pluts_entry_keys
   WHEN EXISTS (SELECT 1 FROM pluts_entry_keys WHERE key = NEW.key)
+    OR EXISTS (SELECT 1 FROM pluts_entry_keys WHERE rowid = NEW.rowid)
   BEGIN SELECT RAISE(ABORT, 'pluts: UNIQUE constraint failed: pluts_entry_keys.key is append-only'); END`,
 
   // ------------------------------------------------------------------

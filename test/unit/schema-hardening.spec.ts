@@ -150,6 +150,65 @@ describe("schema hardening", () => {
         .get();
       expect(row?.entry_id).toBe("ent-1");
     });
+
+    // These are rowid tables, so REPLACE can also conflict on rowid: a raw
+    // insert reusing an existing row's rowid with a DIFFERENT id slips past
+    // an id-only guard, and the conflict delete bypasses the DELETE trigger
+    // (recursive_triggers is OFF by default). The guards must abort on rowid
+    // conflicts too.
+    it("blocks INSERT OR REPLACE via rowid from rewriting a posted amount", () => {
+      const rowid = db
+        .prepare("SELECT rowid FROM pluts_amounts WHERE id = 'amt-1'")
+        .get()?.rowid as number;
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO pluts_amounts (rowid, id, type, account_id, entry_id, amount) VALUES (?, 'amt-evil', 'debit', 'acc-1', 'ent-1', 1)",
+          )
+          .run(rowid),
+      ).toThrow(/append-only/);
+      const row = db
+        .prepare("SELECT amount FROM pluts_amounts WHERE id = 'amt-1'")
+        .get();
+      expect(row?.amount).toBe(10000);
+    });
+
+    it("blocks INSERT OR REPLACE via rowid from rewriting a posted entry", () => {
+      const rowid = db
+        .prepare("SELECT rowid FROM pluts_entries WHERE id = 'ent-1'")
+        .get()?.rowid as number;
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO pluts_entries (rowid, id, description, date, posted_at) VALUES (?, 'ent-evil', 'rewritten', '2026-01-05', '2026-01-05T10:00:00Z')",
+          )
+          .run(rowid),
+      ).toThrow(/append-only/);
+      const row = db
+        .prepare("SELECT description FROM pluts_entries WHERE id = 'ent-1'")
+        .get();
+      expect(row?.description).toBe("Sale");
+    });
+
+    it("blocks INSERT OR REPLACE via rowid from remapping an idempotency key", () => {
+      db.prepare(
+        "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES ('ent-2', 'Other', '2026-01-06', '2026-01-06T10:00:00Z')",
+      ).run();
+      const rowid = db
+        .prepare("SELECT rowid FROM pluts_entry_keys WHERE key = 'key-1'")
+        .get()?.rowid as number;
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO pluts_entry_keys (rowid, key, entry_id) VALUES (?, 'key-evil', 'ent-2')",
+          )
+          .run(rowid),
+      ).toThrow();
+      const row = db
+        .prepare("SELECT entry_id FROM pluts_entry_keys WHERE key = 'key-1'")
+        .get();
+      expect(row?.entry_id).toBe("ent-1");
+    });
   });
 
   describe("row validity enforcement (F-14)", () => {
