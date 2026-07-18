@@ -118,7 +118,10 @@ export class Amount {
     if (weights.length === 0) {
       throw new RangeError("allocate requires at least one weight");
     }
-    const ws = weights.map((w) => {
+    // Array.from visits holes (as undefined) where .map would skip them and
+    // propagate the hole into the result; the explicit bigint check then
+    // rejects them like any other non-integer weight.
+    const ws = Array.from(weights, (w) => {
       if (typeof w === "number") {
         if (!Number.isSafeInteger(w) || w < 0) {
           throw new RangeError(
@@ -127,9 +130,9 @@ export class Amount {
         }
         return BigInt(w);
       }
-      if (w < 0n) {
+      if (typeof w !== "bigint" || w < 0n) {
         throw new RangeError(
-          `allocate weights must be non-negative integers, got ${w}`,
+          `allocate weights must be non-negative integers, got ${String(w)}`,
         );
       }
       return w;

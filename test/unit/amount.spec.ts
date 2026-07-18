@@ -157,6 +157,20 @@ describe("Amount", () => {
     });
 
     // A misspelled policy from untyped JS must fail fast, not silently run
+    // Array.prototype.map skips holes, so a sparse weights array would sail
+    // through per-weight validation and return an array with holes instead
+    // of Amounts — breaking callers that zip the parts back onto lines.
+    it("rejects sparse and undefined weights", () => {
+      const ten = Amount.fromMajor("10.00");
+      // biome-ignore lint/suspicious/noSparseArray: the sparse array IS the case under test
+      expect(() => ten.allocate([1, , 1] as unknown as number[])).toThrow(
+        RangeError,
+      );
+      expect(() =>
+        ten.allocate([1, undefined, 1] as unknown as number[]),
+      ).toThrow(RangeError);
+    });
+
     // as "largest" — that could hand the leftover cents to different lines
     // than intended while still returning a balanced-looking split.
     it("rejects unknown remainder policies", () => {
