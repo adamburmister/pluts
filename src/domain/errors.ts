@@ -59,3 +59,25 @@ export class RepositoryError extends Error {
     this.name = "RepositoryError";
   }
 }
+
+/**
+ * Thrown when an idempotency key is reused with a *different* payload.
+ *
+ * A byte-identical retry of a posting is safe and returns the original entry;
+ * the same key carrying different amounts/description/date is a client bug
+ * (a recycled request id, bad key derivation), and silently returning the
+ * original would mean the second transaction is never recorded — a lost
+ * posting discovered only at reconciliation. Failing loudly surfaces the bug
+ * at the moment it happens.
+ */
+export class IdempotencyConflictError extends Error {
+  constructor(
+    readonly key: string,
+    readonly existingEntryId: string,
+  ) {
+    super(
+      `Idempotency key "${key}" was already used with a different payload (entry ${existingEntryId})`,
+    );
+    this.name = "IdempotencyConflictError";
+  }
+}

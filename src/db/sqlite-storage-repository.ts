@@ -6,10 +6,15 @@ import {
   AmountRecord,
   amountsFromPayload,
   assertBalanced,
+  computeEntryFingerprint,
   Entry,
   type EntryPayload,
 } from "../domain/entry";
-import { RepositoryError, ValidationError } from "../domain/errors";
+import {
+  IdempotencyConflictError,
+  RepositoryError,
+  ValidationError,
+} from "../domain/errors";
 import { type AccountType, type DateRange, toDateISO } from "../domain/types";
 import type { Repository } from "./repository";
 
@@ -235,6 +240,9 @@ export class SqlStorageRepository implements Repository {
     const id = uuid();
     const now = new Date().toISOString();
     const { debits, credits } = amountsFromPayload(payload, id);
+    const payloadHash = payload.idempotencyKey
+      ? await computeEntryFingerprint(payload)
+      : "";
     // Bridge amounts to storage numbers up front, so an out-of-range amount
     // fails before the transaction opens rather than mid-write.
     const lines = [...debits, ...credits].map((a) => ({
@@ -273,9 +281,10 @@ export class SqlStorageRepository implements Repository {
         if (payload.idempotencyKey) {
           this.sql
             .exec(
-              "INSERT INTO pluts_entry_keys (key, entry_id) VALUES (?, ?)",
+              "INSERT INTO pluts_entry_keys (key, entry_id, payload_hash) VALUES (?, ?, ?)",
               payload.idempotencyKey,
               id,
+              payloadHash,
             )
             .toArray();
         }
@@ -284,10 +293,21 @@ export class SqlStorageRepository implements Repository {
       // Two concurrent posts sharing an idempotency key can race past the
       // pre-check in Ledger.postEntry; the loser's key insert hits the unique
       // constraint and the whole transaction rolls back. Recover by returning
-      // the already-persisted entry.
+      // the already-persisted entry — but only for a genuine retry. If the
+      // stored fingerprint differs, the key was reused for different business
+      // content: surface the collision instead of silently dropping it.
       if (payload.idempotencyKey && isUniqueConstraintError(e)) {
-        const existing = await this.getEntryByKey(payload.idempotencyKey);
-        if (existing) return existing;
+        const keyRecord = await this.getEntryKeyRecord(payload.idempotencyKey);
+        if (keyRecord) {
+          if (keyRecord.payloadHash && keyRecord.payloadHash !== payloadHash) {
+            throw new IdempotencyConflictError(
+              payload.idempotencyKey,
+              keyRecord.entryId,
+            );
+          }
+          const existing = await this.getEntry(keyRecord.entryId);
+          if (existing) return existing;
+        }
       }
       throw new RepositoryError("Failed to persist entry", e);
     }
@@ -311,6 +331,25 @@ export class SqlStorageRepository implements Repository {
       .toArray();
     const row = rows[0];
     return row ? this.loadEntry(row) : null;
+  }
+
+  async getEntryKeyRecord(
+    key: string,
+  ): Promise<{ entryId: string; payloadHash: string } | null> {
+    const rows = this.sql
+      .exec<{
+        [key: string]: SqlStorageValue;
+        entry_id: string;
+        payload_hash: string | null;
+      }>(
+        "SELECT entry_id, payload_hash FROM pluts_entry_keys WHERE key = ?",
+        key,
+      )
+      .toArray();
+    const row = rows[0];
+    return row
+      ? { entryId: row.entry_id, payloadHash: row.payload_hash ?? "" }
+      : null;
   }
 
   async getEntryByKey(key: string): Promise<Entry | null> {
