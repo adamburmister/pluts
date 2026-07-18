@@ -13,6 +13,29 @@ export const SCALE = 2;
 const FACTOR = 10n ** BigInt(SCALE);
 
 /**
+ * Expand a scientific-notation decimal string ("1e-7", "1.5e+21") to plain
+ * positional form by shifting the decimal point in string space. Exact — no
+ * floating-point arithmetic, so no double-rounding. Non-exponential strings
+ * pass through unchanged.
+ */
+function expandExponential(s: string): string {
+  const m = /^(\d+)(?:\.(\d+))?e([+-]?\d+)$/i.exec(s);
+  if (!m) return s;
+  const whole = m[1] ?? "0";
+  const frac = m[2] ?? "";
+  const exp = Number(m[3]);
+  const digits = whole + frac;
+  const pointIndex = whole.length + exp;
+  if (pointIndex <= 0) {
+    return `0.${"0".repeat(-pointIndex)}${digits}`;
+  }
+  if (pointIndex >= digits.length) {
+    return digits + "0".repeat(pointIndex - digits.length);
+  }
+  return `${digits.slice(0, pointIndex)}.${digits.slice(pointIndex)}`;
+}
+
+/**
  * A fixed-precision monetary amount stored as integer minor units.
  *
  * Amounts are exact integers in storage; rounding to the supported scale only
@@ -43,8 +66,11 @@ export class Amount {
       if (!Number.isFinite(value))
         throw new RangeError("Amount must be finite");
       if (value < 0) throw new RangeError("Amount must be non-negative");
-      // Stringify preserving significant fractional digits, then parse exactly.
-      return Amount.fromString(value.toString());
+      // Stringify preserving significant fractional digits, then parse
+      // exactly. toString switches to scientific notation for |exp| >= 21 or
+      // <= -7 (e.g. "1e-7"); expand it in string space — exact, no double
+      // rounding — so any finite non-negative number parses.
+      return Amount.fromString(expandExponential(value.toString()));
     }
     return Amount.fromString(value);
   }

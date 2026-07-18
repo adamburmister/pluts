@@ -245,6 +245,22 @@ describe("buildEntry", () => {
     );
   });
 
+  // F-12: 1e-7 stringifies as "1e-7"; the amount transform used to throw a
+  // raw RangeError from inside Zod — a crash instead of a validation failure,
+  // violating the "safeParse must never throw" doctrine.
+  it("fails cleanly (not crashes) for scientific-notation number amounts", () => {
+    const msgs = issuesFor({
+      description: "x",
+      debits: [{ account: acct("Cash"), amount: 1e-7 }],
+      credits: [{ account: acct("Rev", AccountType.Revenue), amount: 1e-7 }],
+    });
+    // 1e-7 rounds to $0.00 at scale 2; the entry is rejected as zero-total —
+    // via ValidationError issues, never a raw throw.
+    expect(msgs.some((m) => m.message.includes("greater than zero"))).toBe(
+      true,
+    );
+  });
+
   it("accepts raw number amounts (Zod transform)", () => {
     const payload = buildEntry({
       description: "x",

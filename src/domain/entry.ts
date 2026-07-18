@@ -1,5 +1,11 @@
 import type { Account } from "./account.js";
 import type { Amount } from "./amount.js";
+import {
+  type AmountLineDTO,
+  type EntryDTO,
+  toAmountLineDTO,
+  toEntryDTO,
+} from "./dto.js";
 import { ValidationError, type ValidationIssue } from "./errors.js";
 import {
   type AmountLine,
@@ -43,14 +49,12 @@ export class AmountRecord {
     readonly entryId: string,
   ) {}
 
-  toJSON(): Record<string, unknown> {
-    return {
-      id: this.id,
-      kind: this.kind,
-      accountId: this.account.id,
-      amount: this.amount.toMajor(),
-      entryId: this.entryId,
-    };
+  /**
+   * Serialize via the DTO mapper so there is exactly one wire shape for a
+   * line, whether it is stringified alone or inside an {@link Entry}.
+   */
+  toJSON(): AmountLineDTO {
+    return toAmountLineDTO(this);
   }
 }
 
@@ -69,23 +73,16 @@ export class Entry {
     readonly debitAmounts: readonly AmountRecord[],
     readonly creditAmounts: readonly AmountRecord[],
     readonly postedAt: string,
-  ) {}
+  ) {
+    // `readonly T[]` is compile-time only; freeze so a runtime push on a
+    // posted entry throws instead of silently mutating the object.
+    Object.freeze(debitAmounts);
+    Object.freeze(creditAmounts);
+  }
 
-  toJSON(): Record<string, unknown> {
-    return {
-      id: this.id,
-      description: this.description,
-      date: this.date,
-      debitAmounts: this.debitAmounts.map((d) => ({
-        ...d,
-        amount: d.amount.toMajor(),
-      })),
-      creditAmounts: this.creditAmounts.map((c) => ({
-        ...c,
-        amount: c.amount.toMajor(),
-      })),
-      postedAt: this.postedAt,
-    };
+  /** Serialize via the DTO mapper — one wire shape (see {@link toEntryDTO}). */
+  toJSON(): EntryDTO {
+    return toEntryDTO(this);
   }
 }
 
