@@ -1,8 +1,11 @@
 export type { Repository } from "./db/repository.js";
 export {
+  getLedgerMeta,
+  type LedgerMeta,
   migrate,
   SCHEMA_SQL,
   SCHEMA_STATEMENTS,
+  SCHEMA_VERSION,
 } from "./db/schema.js";
 export {
   fromStorageInt,
