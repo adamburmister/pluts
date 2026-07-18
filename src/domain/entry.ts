@@ -116,6 +116,25 @@ export function assertBalanced(payload: EntryPayload): void {
       message: "Entry must have at least one credit amount",
     });
   }
+  // F-13: every line must move money. The facade's schema enforces this on
+  // buildEntry input, but hand-constructed payloads reach this seam without
+  // passing through it.
+  payload.debits.forEach((l, i) => {
+    if (l.amount.minor === 0n) {
+      issues.push({
+        path: ["debits", i, "amount"],
+        message: "Amount must be greater than zero",
+      });
+    }
+  });
+  payload.credits.forEach((l, i) => {
+    if (l.amount.minor === 0n) {
+      issues.push({
+        path: ["credits", i, "amount"],
+        message: "Amount must be greater than zero",
+      });
+    }
+  });
   const debitSum = payload.debits.reduce((acc, l) => acc + l.amount.minor, 0n);
   const creditSum = payload.credits.reduce(
     (acc, l) => acc + l.amount.minor,
