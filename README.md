@@ -83,6 +83,7 @@ If you want to run Pluts outside of Cloudflare (or support additional backends),
 - Implement the same transactional semantics for `insertEntry` (all row inserts + idempotency-key insert must be atomic). Use your DB's transactions.
 - Apply the schema in `SCHEMA_STATEMENTS` (see `src/db/schema.ts`) or translate it to your DB's DDL before first use. Note that the append-only/validation trigger statements contain internal semicolons — apply statements one at a time (as `migrate()` does); do not split `SCHEMA_SQL` naively on `;`.
 - Plain SQLite defaults to `PRAGMA foreign_keys = OFF` — enable it per connection (`better-sqlite3`, `node:sqlite`) or the schema's FK constraints silently won't be enforced. Durable Object storage enforces them already.
+- Call `assertBalanced(payload)` (exported from `pluts`) at the top of `insertEntry` before writing anything. `EntryPayload` is structurally constructible, so the double-entry invariant must be enforced at the persistence seam, not only in the `Ledger` facade.
 - Persist amounts as integer minor units (the library uses `bigint` internally; convert to/from your driver's numeric type safely).
 - Ensure `getAccountByName`, `sumByType`, `sumCredits`/`sumDebits`, and `amountsForAccount` match the SQL semantics expected by the domain code.
 
