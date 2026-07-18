@@ -176,9 +176,11 @@ await ledger.postEntry({
 await ledger.accountBalance(cash); // per-account
 await ledger.balanceByType(AccountType.Asset); // per-type
 await ledger.trialBalance(); // should be zero
+await ledger.trialBalanceReport("2024-12-31"); // classic listing: per-account debit/credit columns + totals
 
-// Reports
-await ledger.balanceSheet(); // { assets, liabilities, equity, balanced }
+// Reports. Balance sheet and trial balance are point-in-time (asOf);
+// the income statement is a period (flow) statement and takes a range.
+await ledger.balanceSheet("2024-12-31"); // { assets, liabilities, equity, balanced }
 await ledger.incomeStatement({ fromDate: "2024-01-01" }); // { revenue, expenses, netIncome }
 ```
 
@@ -229,7 +231,7 @@ Rules (enforced via Zod schema + `superRefine`):
 
 - `description` required (non-empty)
 - at least one debit and one credit
-- every amount requires an account and a non-negative value
+- every amount requires an account and a strictly positive value (a $0.00 leg attaches an account to an entry that didn't touch it)
 - sum(debits) === sum(credits) (exact)
 - `date` defaults to today if omitted
 - account names must resolve to existing accounts

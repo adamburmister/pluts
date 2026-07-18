@@ -47,6 +47,8 @@ export {
   type BalanceSheet,
   type IncomeStatement,
   Ledger,
+  type TrialBalanceReport,
+  type TrialBalanceRow,
 } from "./domain/ledger.js";
 export {
   type AmountInput,
