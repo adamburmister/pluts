@@ -69,6 +69,7 @@ interface EntryRow {
   description: string;
   date: string;
   posted_at: string;
+  seq: number | null;
 }
 interface AmountRow {
   [key: string]: SqlStorageValue;
@@ -253,15 +254,25 @@ export class SqlStorageRepository implements Repository {
     // The entry row, every amount row, and (if present) the idempotency-key row
     // must commit atomically. transactionSync runs its callback in one SQLite
     // transaction; if any statement throws, the whole thing rolls back.
+    let seq = 0;
     try {
       this.storage.transactionSync(() => {
+        // Next journal number, read inside the same transaction as the
+        // insert. The DO is single-writer, so MAX+1 cannot race.
+        const nextRow = this.sql
+          .exec<{ [key: string]: SqlStorageValue; next: number }>(
+            "SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM pluts_entries",
+          )
+          .one();
+        seq = nextRow.next;
         this.sql
           .exec(
-            "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO pluts_entries (id, description, date, posted_at, seq) VALUES (?, ?, ?, ?, ?)",
             id,
             payload.description,
             payload.date,
             now,
+            seq,
           )
           .toArray();
 
@@ -319,13 +330,23 @@ export class SqlStorageRepository implements Repository {
       debits,
       credits,
       now,
+      seq,
     );
+  }
+
+  async entrySequenceStats(): Promise<{ count: number; maxSeq: number }> {
+    const row = this.sql
+      .exec<{ [key: string]: SqlStorageValue; count: number; maxSeq: number }>(
+        "SELECT COUNT(*) AS count, COALESCE(MAX(seq), 0) AS maxSeq FROM pluts_entries",
+      )
+      .one();
+    return { count: row.count, maxSeq: row.maxSeq };
   }
 
   async getEntry(id: string): Promise<Entry | null> {
     const rows = this.sql
       .exec<EntryRow>(
-        "SELECT id, description, date, posted_at FROM pluts_entries WHERE id = ?",
+        "SELECT id, description, date, posted_at, seq FROM pluts_entries WHERE id = ?",
         id,
       )
       .toArray();
@@ -355,7 +376,7 @@ export class SqlStorageRepository implements Repository {
   async getEntryByKey(key: string): Promise<Entry | null> {
     const rows = this.sql
       .exec<EntryRow>(
-        `SELECT e.id, e.description, e.date, e.posted_at
+        `SELECT e.id, e.description, e.date, e.posted_at, e.seq
          FROM pluts_entries e
          INNER JOIN pluts_entry_keys k ON k.entry_id = e.id
          WHERE k.key = ?`,
@@ -370,7 +391,7 @@ export class SqlStorageRepository implements Repository {
     const dir = order === "asc" ? "ASC" : "DESC";
     const rows = this.sql
       .exec<EntryRow>(
-        `SELECT id, description, date, posted_at FROM pluts_entries ORDER BY date ${dir}`,
+        `SELECT id, description, date, posted_at, seq FROM pluts_entries ORDER BY date ${dir}, seq ${dir}`,
       )
       .toArray();
     // loadEntry issues its own exec per entry. SqlStorage cursors are consumed
@@ -411,7 +432,11 @@ export class SqlStorageRepository implements Repository {
   async amountsForAccount(accountId: string): Promise<AmountRecord[]> {
     const rows = this.sql
       .exec<AmountRow>(
-        "SELECT id, type, account_id, entry_id, amount FROM pluts_amounts WHERE account_id = ? ORDER BY entry_id ASC",
+        `SELECT a.id, a.type, a.account_id, a.entry_id, a.amount
+         FROM pluts_amounts a
+         INNER JOIN pluts_entries e ON e.id = a.entry_id
+         WHERE a.account_id = ?
+         ORDER BY e.date ASC, e.seq ASC, a.id ASC`,
         accountId,
       )
       .toArray();
@@ -421,11 +446,11 @@ export class SqlStorageRepository implements Repository {
   async entriesForAccount(accountId: string): Promise<Entry[]> {
     const rows = this.sql
       .exec<EntryRow>(
-        `SELECT DISTINCT e.id, e.description, e.date, e.posted_at
+        `SELECT DISTINCT e.id, e.description, e.date, e.posted_at, e.seq
          FROM pluts_entries e
          INNER JOIN pluts_amounts a ON a.entry_id = e.id
          WHERE a.account_id = ?
-         ORDER BY e.date DESC`,
+         ORDER BY e.date DESC, e.seq DESC`,
         accountId,
       )
       .toArray();
@@ -470,6 +495,7 @@ export class SqlStorageRepository implements Repository {
       debits,
       credits,
       row.posted_at,
+      row.seq,
     );
   }
 

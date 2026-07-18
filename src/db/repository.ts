@@ -25,6 +25,13 @@ export interface Repository {
   insertEntry(payload: EntryPayload): Promise<Entry>;
 
   getEntry(id: string): Promise<Entry | null>;
+  /**
+   * Journal sequence stats: total number of entries and the highest assigned
+   * sequence number. With gap-free monotonic numbering these are equal; a
+   * difference indicates entries missing between surviving rows (a contiguous
+   * tail truncation shifts both together and is not detectable from these).
+   */
+  entrySequenceStats(): Promise<{ count: number; maxSeq: number }>;
   /** Look up an entry by its client-supplied idempotency key, or null if none. */
   getEntryByKey(key: string): Promise<Entry | null>;
   /**

@@ -109,7 +109,7 @@ Tenancy is intentionally **not** included. Multi-tenancy is provided by Durable 
 Four tables (prefixed `pluts_`), defined in `src/db/schema.ts`:
 
 - `pluts_accounts` — id, name, type (CHECK-constrained to the five account types), contra, created_at
-- `pluts_entries` — id, description, date, posted_at
+- `pluts_entries` — id, description, date, posted_at, seq (monotonic journal number assigned at posting; entries order by `(date, seq)` and `Ledger.verifyNoSequenceGaps()` checks `MAX(seq) = COUNT(*)` — detecting any removal except a contiguous tail truncation, which would need an externally persisted high-water mark to prove)
 - `pluts_amounts` — id, type (`'credit'` | `'debit'`), account_id, entry_id, amount (integer minor units)
 - `pluts_entry_keys` — key, entry_id, payload_hash (idempotency-key dedup table; the hash fingerprints the posted payload so a byte-identical retry returns the original entry while reusing a key with *different* content throws `IdempotencyConflictError` instead of silently dropping the second transaction)
 

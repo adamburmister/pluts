@@ -33,6 +33,7 @@ interface MemEntry {
   description: string;
   date: string;
   postedAt: string;
+  seq: number;
   debitAmounts: AmountRecord[];
   creditAmounts: AmountRecord[];
 }
@@ -53,6 +54,7 @@ export class InMemoryRepository implements Repository {
   private accounts = new Map<string, MemAccount>();
   private entries = new Map<string, MemEntry>();
   private nameIndex = new Map<string, string>();
+  private seqCounter = 0;
   private keyToEntry = new Map<
     string,
     { entryId: string; payloadHash: string }
@@ -147,11 +149,13 @@ export class InMemoryRepository implements Repository {
       rec.credits.push({ amount: a.amount, entryId: id });
     }
 
+    this.seqCounter += 1;
     const memEntry: MemEntry = {
       id,
       description: payload.description,
       date: payload.date,
       postedAt: now,
+      seq: this.seqCounter,
       debitAmounts: debits,
       creditAmounts: credits,
     };
@@ -182,12 +186,21 @@ export class InMemoryRepository implements Repository {
 
   async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
     const list = [...this.entries.values()];
+    // Deterministic journal order: date first, then posting sequence.
     list.sort((a, b) =>
       order === "asc"
-        ? a.date.localeCompare(b.date)
-        : b.date.localeCompare(a.date),
+        ? a.date.localeCompare(b.date) || a.seq - b.seq
+        : b.date.localeCompare(a.date) || b.seq - a.seq,
     );
     return list.map((m) => this.toEntry(m));
+  }
+
+  async entrySequenceStats(): Promise<{ count: number; maxSeq: number }> {
+    let maxSeq = 0;
+    for (const m of this.entries.values()) {
+      if (m.seq > maxSeq) maxSeq = m.seq;
+    }
+    return { count: this.entries.size, maxSeq };
   }
 
   async sumCredits(accountId: string, range?: DateRange): Promise<Amount> {
@@ -217,22 +230,19 @@ export class InMemoryRepository implements Repository {
   }
 
   async amountsForAccount(accountId: string): Promise<AmountRecord[]> {
-    const rec = this.accounts.get(accountId);
-    if (!rec) return [];
+    // Statement view: amounts in the owning entry's journal order
+    // (date, seq), matching the SQL repository.
+    const mems = [...this.entries.values()]
+      .filter((m) =>
+        [...m.debitAmounts, ...m.creditAmounts].some(
+          (a) => a.account.id === accountId,
+        ),
+      )
+      .sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq);
     const out: AmountRecord[] = [];
-    for (const c of rec.credits) {
-      const entry = this.entries.get(c.entryId);
-      if (entry)
-        out.push(
-          ...entry.creditAmounts.filter((a) => a.account.id === accountId),
-        );
-    }
-    for (const d of rec.debits) {
-      const entry = this.entries.get(d.entryId);
-      if (entry)
-        out.push(
-          ...entry.debitAmounts.filter((a) => a.account.id === accountId),
-        );
+    for (const m of mems) {
+      out.push(...m.debitAmounts.filter((a) => a.account.id === accountId));
+      out.push(...m.creditAmounts.filter((a) => a.account.id === accountId));
     }
     return out;
   }
@@ -274,6 +284,7 @@ export class InMemoryRepository implements Repository {
       [...mem.debitAmounts],
       [...mem.creditAmounts],
       mem.postedAt,
+      mem.seq,
     );
   }
 }

@@ -80,6 +80,13 @@ export class Entry {
     readonly debitAmounts: readonly AmountRecord[],
     readonly creditAmounts: readonly AmountRecord[],
     readonly postedAt: string,
+    /**
+     * Monotonic journal number, assigned at posting time (1, 2, 3, …).
+     * Gives entries a citable identity ("JE 142"), makes same-date ordering
+     * deterministic, and lets MAX(seq) === COUNT(*) prove completeness.
+     * Null only for domain objects constructed outside a repository.
+     */
+    readonly seq: number | null = null,
   ) {
     // `readonly T[]` is compile-time only; freeze so a runtime push on a
     // posted entry throws instead of silently mutating the object.

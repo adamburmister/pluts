@@ -312,4 +312,18 @@ export class Ledger {
   async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
     return this.repo.allEntries(order);
   }
+
+  /**
+   * Journal gap check: sequence numbers are assigned monotonically from 1
+   * with no gaps, so a journal of N entries has MAX(seq) === N. Returns
+   * false when entries are missing *between* surviving rows — any removal
+   * except a contiguous truncation of the tail, which shifts MAX(seq) and
+   * COUNT(*) together and is invisible to this check. Proving "nothing was
+   * ever removed" would need a high-water mark persisted outside the entry
+   * rows; this method deliberately claims only gap-freedom.
+   */
+  async verifyNoSequenceGaps(): Promise<boolean> {
+    const { count, maxSeq } = await this.repo.entrySequenceStats();
+    return maxSeq === count;
+  }
 }
