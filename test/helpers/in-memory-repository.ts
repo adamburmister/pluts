@@ -228,12 +228,14 @@ export class InMemoryRepository implements Repository {
   }
 
   private toEntry(mem: MemEntry): Entry {
+    // Copy the line arrays: returned Entry objects must not alias internal
+    // state (the SQL repository re-hydrates per query; the double must match).
     return new Entry(
       mem.id,
       mem.description,
       mem.date,
-      mem.debitAmounts,
-      mem.creditAmounts,
+      [...mem.debitAmounts],
+      [...mem.creditAmounts],
       mem.postedAt,
     );
   }
