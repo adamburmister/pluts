@@ -100,6 +100,16 @@ Examples:
 
 Because the domain is decoupled via `Repository` and tests exercise the domain with an in-memory repository, porting is limited to a single new repository adapter — the rest of Pluts should work unchanged.
 
+### Durable Object SQLite constraints
+
+Verified against the real runtime by the workerd integration suite (`test/integration/`); keep these in mind when touching schema or repository code:
+
+- **`SqlStorage` does not bind `bigint`** — every amount crosses an IEEE 754 `number` boundary at the storage seam (hence `toStorageInt`/`fromStorageInt`). The schema's `amount <= 9007199254740991` CHECK/trigger still matters: an oversized value can't be *bound*, but raw SQL can write one as a literal.
+- **`PRAGMA user_version` is not supported** in DO storage — schema versioning must live in a table, which is what `pluts_ledger_meta.schema_version` does. `PRAGMA table_info` *is* allowed (the migrations rely on it).
+- **`SqlStorage` handles cannot cross Durable Object contexts** — workerd throws "Cannot perform I/O on behalf of a different Durable Object". Never cache a `sql` handle outside the owning DO; in tests, keep all use inside a single `runInDurableObject` callback.
+- **Everything the schema uses is authorizer-approved**: triggers with `RAISE(ABORT)`/`WHEN`, `date()` in CHECK constraints, `sqlite_master` reads, explicit rowid writes, `ON CONFLICT DO UPDATE`. If a future change reaches for something workerd rejects, the integration suite fails in CI.
+- **node:sqlite is looser than workerd in one trap-prone way**: unbound placeholders silently bind as NULL there, so a test fake that drops binds can stay green while doing nothing. The workerd suite exists to catch exactly this class of gap.
+
 ### Tenancy
 
 Tenancy is intentionally **not** included. Multi-tenancy is provided by Durable Object isolation: one DO instance = one ledger. Account names are unique within a ledger.
@@ -245,13 +255,17 @@ Rules (enforced via Zod schema + `superRefine`):
 ## Testing
 
 ```sh
-bun run test            # all tests
-bun run test:unit       # domain unit tests (in-memory, fast)
-bun run typecheck       # tsc --noEmit
-bun run lint            # biome
+npm test                             # both suites: unit + workerd integration
+npx vitest run --project unit        # fast unit suite (node:sqlite, in-memory)
+npx vitest run --project workerd     # real Durable Object SQLite (workerd)
+npm run typecheck                    # tsc --noEmit
+npm run lint                         # biome
 ```
 
-The unit tests cover amount math, balance computation for all account types and contra variants, entry validation, and the trial balance invariant, all against an in-memory `Repository`. The `SqlStorageRepository` (production) is exercised end-to-end by the [pluts-ledger-do](https://github.com/adamburmister/pluts-ledger-do) app's Durable Object.
+Two test layers:
+
+- **Unit** (`test/unit/`) — amount math, balance computation for all account types and contra variants, entry validation, the trial balance invariant, and the schema DDL semantics, against an in-memory `Repository` and `node:sqlite`.
+- **workerd integration** (`test/integration/`) — runs inside the actual Workers runtime via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/), driving the production `SqlStorageRepository` and `migrate()` against a real SQLite-backed Durable Object's `ctx.storage` (no mocks). This is what proves the parts node:sqlite cannot: workerd's SQL authorizer, trigger behavior including the rowid sentinel, `transactionSync` atomicity, and the bind-type boundary.
 
 ## Development
 
