@@ -34,7 +34,7 @@ describe("Amount", () => {
       expect(Amount.fromMajor(5e-3).toMajor()).toBe("0.01");
       expect(Amount.fromMajor(1.5e3).toMajor()).toBe("1500.00");
       expect(Amount.fromMajor(1e21).toMajor()).toBe(
-        `${"1" + "0".repeat(21)}.00`,
+        `${`1${"0".repeat(21)}`}.00`,
       );
     });
 
