@@ -273,6 +273,28 @@ describe("schema hardening", () => {
       }
     });
 
+    // The rowid guards treat NEW.rowid = -1 as "auto-assigned" — so a real
+    // row stored at rowid -1 by raw SQL would make that sentinel match and
+    // abort every ordinary insert thereafter. Negative rowids must therefore
+    // be unstorable.
+    it("rejects negative explicit rowids so the auto-rowid sentinel stays unambiguous", () => {
+      for (const table of [
+        "pluts_entries (rowid, id, description, date, posted_at) VALUES (-1, 'ent-neg', 'x', '2026-01-05', '2026-01-05T10:00:00Z')",
+        "pluts_amounts (rowid, id, type, account_id, entry_id, amount) VALUES (-1, 'amt-neg', 'debit', 'acc-1', 'ent-1', 1)",
+        "pluts_entry_keys (rowid, key, entry_id) VALUES (-1, 'key-neg', 'ent-1')",
+      ]) {
+        expect(() => db.prepare(`INSERT INTO ${table}`).run()).toThrow(/rowid/);
+      }
+      // Ordinary auto-rowid inserts still work afterwards.
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES ('ent-after', 'ok', '2026-01-06', '2026-01-06T10:00:00Z')",
+          )
+          .run(),
+      ).not.toThrow();
+    });
+
     // Amounts above Number.MAX_SAFE_INTEGER store fine as SQLite 64-bit
     // integers but cannot cross the SqlStorage JS-number boundary on read —
     // every later read/SUM would throw in fromStorageInt. Enforce the

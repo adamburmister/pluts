@@ -115,6 +115,25 @@ export const SCHEMA_STATEMENTS: string[] = [
     OR EXISTS (SELECT 1 FROM pluts_entry_keys WHERE rowid = NEW.rowid)
   BEGIN SELECT RAISE(ABORT, 'pluts: UNIQUE constraint failed: pluts_entry_keys.key is append-only'); END`,
 
+  // The guards above read NEW.rowid = -1 as "auto-assigned" (its BEFORE
+  // INSERT sentinel value), so a real row stored at a negative rowid would
+  // make the sentinel match an existing row and abort every ordinary insert.
+  // AFTER INSERT sees the actually-assigned rowid — always positive for
+  // auto-assignment — so rejecting negatives here makes the poisoned state
+  // unstorable without touching normal inserts.
+  `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_negative_rowid
+  AFTER INSERT ON pluts_entries
+  WHEN NEW.rowid < 0
+  BEGIN SELECT RAISE(ABORT, 'pluts: negative rowid values are reserved'); END`,
+  `CREATE TRIGGER IF NOT EXISTS pluts_amounts_no_negative_rowid
+  AFTER INSERT ON pluts_amounts
+  WHEN NEW.rowid < 0
+  BEGIN SELECT RAISE(ABORT, 'pluts: negative rowid values are reserved'); END`,
+  `CREATE TRIGGER IF NOT EXISTS pluts_entry_keys_no_negative_rowid
+  AFTER INSERT ON pluts_entry_keys
+  WHEN NEW.rowid < 0
+  BEGIN SELECT RAISE(ABORT, 'pluts: negative rowid values are reserved'); END`,
+
   // ------------------------------------------------------------------
   // Row-validity enforcement (audit finding F-14).
   //
