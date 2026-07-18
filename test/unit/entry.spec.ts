@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Account } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
-import { buildEntry } from "../../src/domain/entry";
+import { buildEntry, computeEntryFingerprint } from "../../src/domain/entry";
 import { ValidationError, type ValidationIssue } from "../../src/domain/errors";
 import type { EntryInput } from "../../src/domain/schemas";
 import { AccountType } from "../../src/domain/types";
@@ -215,5 +215,39 @@ describe("buildEntry", () => {
     if (!credit) throw new Error("no credit");
     expect(debit.amount.toMajor()).toBe("100.00");
     expect(credit.amount.toMajor()).toBe("100.00");
+  });
+});
+
+describe("computeEntryFingerprint", () => {
+  // A retry of a date-less request is still the same request even if it
+  // arrives after a UTC day rollover: the fingerprint must hash what the
+  // caller sent (date omitted), not the day the retry happened to land on.
+  // Otherwise a delayed retry throws IdempotencyConflictError instead of
+  // returning the original entry.
+  it("is stable across a day boundary when the caller omitted the date", async () => {
+    const input = baseInput({ idempotencyKey: "req-1" });
+    const day1 = buildEntry(
+      input,
+      () => null,
+      () => new Date("2026-07-05T23:59:59Z"),
+    );
+    const day2 = buildEntry(
+      input,
+      () => null,
+      () => new Date("2026-07-06T00:00:01Z"),
+    );
+    expect(day1.date).toBe("2026-07-05");
+    expect(day2.date).toBe("2026-07-06");
+    expect(await computeEntryFingerprint(day2)).toBe(
+      await computeEntryFingerprint(day1),
+    );
+  });
+
+  it("distinguishes explicitly different dates", async () => {
+    const a = buildEntry(baseInput({ date: "2026-01-05" }));
+    const b = buildEntry(baseInput({ date: "2026-01-06" }));
+    expect(await computeEntryFingerprint(a)).not.toBe(
+      await computeEntryFingerprint(b),
+    );
   });
 });
