@@ -4,6 +4,7 @@ import { Amount } from "../../src/domain/amount";
 import {
   type AmountRecord,
   amountsFromPayload,
+  assertBalanced,
   computeEntryFingerprint,
   Entry,
   type EntryPayload,
@@ -62,7 +63,7 @@ export class InMemoryRepository implements Repository {
     type: AccountType;
     contra: boolean;
   }): Promise<Account> {
-    const key = `${input.name}\0${input.type}`;
+    const key = input.name;
     if (this.nameIndex.has(key)) {
       throw new ValidationError(
         [{ path: ["name"], message: "has already been taken" }],
@@ -110,6 +111,7 @@ export class InMemoryRepository implements Repository {
   }
 
   async insertEntry(payload: EntryPayload): Promise<Entry> {
+    assertBalanced(payload);
     // Mirror the SQL repository's unique-constraint semantics on the key
     // column: a duplicate key is either a genuine retry (same fingerprint —
     // return the original) or a collision (different fingerprint — throw).

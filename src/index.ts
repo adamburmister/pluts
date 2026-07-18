@@ -23,6 +23,7 @@ export {
   type AmountKind,
   AmountRecord,
   amountsFromPayload,
+  assertBalanced,
   buildEntry,
   computeEntryFingerprint,
   Entry,
@@ -54,6 +55,7 @@ export {
   ACCOUNT_TYPES,
   AccountType,
   type DateRange,
+  isValidISODate,
   normalCreditBalance,
   toDateISO,
 } from "./domain/types.js";

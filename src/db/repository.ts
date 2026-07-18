@@ -15,7 +15,13 @@ export interface Repository {
   getAccountsByType(type: AccountType): Promise<Account[]>;
   allAccounts(): Promise<Account[]>;
 
-  /** Validate and persist an entry (and its amounts) atomically. Returns the persisted entry. */
+  /**
+   * Persist an entry (and its amounts) atomically. Returns the persisted
+   * entry. Implementations MUST call `assertBalanced(payload)` before writing:
+   * `EntryPayload` is structurally constructible, so the double-entry
+   * invariant (≥1 debit, ≥1 credit, sum(debits) === sum(credits), total > 0)
+   * has to be enforced at this seam, not only in the `Ledger` facade.
+   */
   insertEntry(payload: EntryPayload): Promise<Entry>;
 
   getEntry(id: string): Promise<Entry | null>;

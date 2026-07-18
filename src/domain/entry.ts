@@ -101,6 +101,53 @@ function newId(): string {
 }
 
 /**
+ * Assert the double-entry invariant on a payload about to be persisted:
+ * at least one debit, at least one credit, sum(debits) === sum(credits),
+ * and a non-zero total. Throws {@link ValidationError} otherwise.
+ *
+ * {@link buildEntry} already enforces this via the input schema, but
+ * {@link EntryPayload} is a structural interface — nothing stops a caller
+ * (or a third-party Repository port) from hand-constructing an unbalanced
+ * payload and passing it straight to `insertEntry`. Every `Repository`
+ * implementation MUST call this before persisting; the invariant belongs to
+ * the persistence seam, not just the input facade.
+ */
+export function assertBalanced(payload: EntryPayload): void {
+  const issues: ValidationIssue[] = [];
+  if (payload.debits.length === 0) {
+    issues.push({
+      path: ["debits"],
+      message: "Entry must have at least one debit amount",
+    });
+  }
+  if (payload.credits.length === 0) {
+    issues.push({
+      path: ["credits"],
+      message: "Entry must have at least one credit amount",
+    });
+  }
+  const debitSum = payload.debits.reduce((acc, l) => acc + l.amount.minor, 0n);
+  const creditSum = payload.credits.reduce(
+    (acc, l) => acc + l.amount.minor,
+    0n,
+  );
+  if (debitSum !== creditSum) {
+    issues.push({
+      path: [],
+      message: "The credit and debit amounts are not equal",
+    });
+  } else if (debitSum === 0n && issues.length === 0) {
+    issues.push({
+      path: [],
+      message: "Entry amounts must be greater than zero",
+    });
+  }
+  if (issues.length > 0) {
+    throw new ValidationError(issues, "Unbalanced entry");
+  }
+}
+
+/**
  * Validate input and assemble an {@link EntryPayload}. Throws
  * {@link ValidationError} on failure with a flat list of path-tagged issues.
  *
