@@ -12,7 +12,8 @@ import { InMemoryRepository } from "../helpers/in-memory-repository";
  * identity but no order and no completeness check: same-day entries came back
  * in nondeterministic order, and nothing could show "no entries are missing".
  * Every posted entry gets a monotonically increasing seq, ordering is
- * (date, seq) everywhere, and MAX(seq) === COUNT(*) proves completeness.
+ * (date, seq) everywhere, and MAX(seq) === COUNT(*) detects internal gaps
+ * (tail truncation is out of scope — it needs an external high-water mark).
  */
 describe("journal sequence (in-memory)", () => {
   let ledger: Ledger;
@@ -71,14 +72,14 @@ describe("journal sequence (in-memory)", () => {
     ]);
   });
 
-  it("verifyJournalComplete is true when the sequence has no gaps", async () => {
+  it("verifyNoSequenceGaps is true when the sequence has no gaps", async () => {
     await post("a", "2026-01-01");
     await post("b", "2026-01-02");
-    expect(await ledger.verifyJournalComplete()).toBe(true);
+    expect(await ledger.verifyNoSequenceGaps()).toBe(true);
   });
 
-  it("verifyJournalComplete is true on an empty ledger", async () => {
-    expect(await ledger.verifyJournalComplete()).toBe(true);
+  it("verifyNoSequenceGaps is true on an empty ledger", async () => {
+    expect(await ledger.verifyNoSequenceGaps()).toBe(true);
   });
 });
 
@@ -136,5 +137,51 @@ describe("journal sequence (schema migration)", () => {
       .prepare("SELECT id, seq FROM pluts_entries ORDER BY seq ASC")
       .all();
     expect(again.map((r) => r.seq)).toEqual([1, 2, 3]);
+  });
+
+  // A deploy can die between ALTER TABLE (adds seq) and the backfill UPDATE.
+  // The column then exists, so a guard keyed on "column missing" would skip
+  // the backfill forever, leaving NULL rows that sort ahead of numbered ones.
+  it("backfills rows left unnumbered by an interrupted migration", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`CREATE TABLE pluts_entries (
+      id TEXT PRIMARY KEY NOT NULL,
+      description TEXT NOT NULL,
+      date TEXT NOT NULL,
+      posted_at TEXT NOT NULL
+    )`);
+    const ins = db.prepare(
+      "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES (?, ?, ?, ?)",
+    );
+    ins.run("e1", "first", "2026-01-05", "2026-01-05T10:00:00Z");
+    ins.run("e2", "second", "2026-01-06", "2026-01-06T10:00:00Z");
+    // Simulate the interruption: column added, backfill never ran.
+    db.exec("ALTER TABLE pluts_entries ADD COLUMN seq INTEGER");
+
+    migrate(fakeSqlStorage(db));
+
+    const rows = db
+      .prepare("SELECT id, seq FROM pluts_entries ORDER BY seq ASC")
+      .all();
+    expect(rows.map((r) => r.id)).toEqual(["e1", "e2"]);
+    expect(rows.map((r) => r.seq)).toEqual([1, 2]);
+  });
+
+  it("numbers stray NULL rows after the highest existing seq", () => {
+    const db = new DatabaseSync(":memory:");
+    migrate(fakeSqlStorage(db));
+    const ins = db.prepare(
+      "INSERT INTO pluts_entries (id, description, date, posted_at, seq) VALUES (?, ?, ?, ?, ?)",
+    );
+    ins.run("e1", "numbered", "2026-01-05", "2026-01-05T10:00:00Z", 1);
+    ins.run("e2", "stray", "2026-01-06", "2026-01-06T10:00:00Z", null);
+
+    migrate(fakeSqlStorage(db));
+
+    const rows = db
+      .prepare("SELECT id, seq FROM pluts_entries ORDER BY seq ASC")
+      .all();
+    expect(rows.map((r) => r.seq)).toEqual([1, 2]);
+    expect(rows.map((r) => r.id)).toEqual(["e1", "e2"]);
   });
 });

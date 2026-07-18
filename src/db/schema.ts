@@ -33,7 +33,8 @@ export const SCHEMA_STATEMENTS: string[] = [
   // *numbered* record. seq is assigned monotonically at insert (MAX(seq)+1
   // inside the posting transaction — safe under the DO single-writer model),
   // giving citable entry numbers, deterministic (date, seq) ordering, and a
-  // one-query completeness check: MAX(seq) = COUNT(*) iff nothing is missing.
+  // one-query gap check: MAX(seq) = COUNT(*) iff no entry is missing between
+  // surviving rows (tail truncation needs an external high-water mark).
   `CREATE UNIQUE INDEX IF NOT EXISTS pluts_entries_seq_idx ON pluts_entries (seq)`,
   `CREATE TABLE IF NOT EXISTS pluts_amounts (
   id TEXT PRIMARY KEY NOT NULL,
@@ -88,19 +89,39 @@ export function migrate(sql: SqlStorage): void {
   // created: databases provisioned before journal numbering lack the seq
   // column (CREATE TABLE IF NOT EXISTS skips them). ALTER TABLE is not
   // idempotent, so probe via table_info (an allowed pragma in DO SQL
-  // storage). Backfill numbers existing entries by rowid — insertion order,
-  // which is the posting order (the library never deletes).
+  // storage).
   const entryColumns = sql
     .exec("PRAGMA table_info(pluts_entries)")
     .toArray() as Array<{ name?: unknown }>;
   if (entryColumns.length > 0 && !entryColumns.some((c) => c.name === "seq")) {
     sql.exec("ALTER TABLE pluts_entries ADD COLUMN seq INTEGER").toArray();
-    sql
-      .exec("UPDATE pluts_entries SET seq = rowid WHERE seq IS NULL")
-      .toArray();
   }
 
   for (const stmt of SCHEMA_STATEMENTS) {
     sql.exec(stmt).toArray();
+  }
+
+  // Backfill unnumbered rows on every migrate, not only when the column was
+  // just added: a deploy interrupted between ALTER TABLE and the backfill
+  // leaves NULLs behind a "column already exists" guard forever. Numbering
+  // continues from the highest existing seq (new rows may have been posted
+  // since the interruption, so rowid alone could collide) in rowid order —
+  // insertion order, which is posting order (the library never deletes).
+  const maxRow = sql
+    .exec("SELECT COALESCE(MAX(seq), 0) AS max_seq FROM pluts_entries")
+    .toArray() as Array<{ max_seq?: unknown }>;
+  let nextSeq = Number(maxRow[0]?.max_seq ?? 0);
+  const unnumbered = sql
+    .exec("SELECT id FROM pluts_entries WHERE seq IS NULL ORDER BY rowid ASC")
+    .toArray() as Array<{ id?: unknown }>;
+  for (const row of unnumbered) {
+    nextSeq += 1;
+    sql
+      .exec(
+        "UPDATE pluts_entries SET seq = ? WHERE id = ?",
+        nextSeq,
+        String(row.id),
+      )
+      .toArray();
   }
 }
