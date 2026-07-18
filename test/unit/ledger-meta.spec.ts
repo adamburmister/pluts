@@ -89,6 +89,31 @@ describe("migration safety", () => {
     expect(() => migrate(fakeSqlStorage(db))).toThrow(RepositoryError);
   });
 
+  // The refusal must happen BEFORE any other DDL runs: a newer release may
+  // have reshaped tables this build's statements still reference, so an old
+  // build must not execute v1 DDL against a v2 database on its way to the
+  // version check.
+  it("rejects a newer schema version before applying any other DDL", () => {
+    const db = new DatabaseSync(":memory:");
+    // A database as a newer release would leave it: meta stamped, and the
+    // rest of the schema owned by that newer version (not created here).
+    db.exec(
+      "CREATE TABLE pluts_ledger_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)",
+    );
+    db.prepare(
+      "INSERT INTO pluts_ledger_meta (key, value) VALUES ('schema_version', ?)",
+    ).run(String(SCHEMA_VERSION + 1));
+
+    expect(() => migrate(fakeSqlStorage(db))).toThrow(RepositoryError);
+    // No v1 DDL may have executed before the refusal.
+    const tables = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name != 'pluts_ledger_meta'",
+      )
+      .all();
+    expect(tables).toEqual([]);
+  });
+
   it("advances an older stored schema version to the current one", () => {
     const db = new DatabaseSync(":memory:");
     migrate(fakeSqlStorage(db));

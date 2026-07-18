@@ -12,6 +12,17 @@ import { RepositoryError } from "../domain/errors";
  * `Number(amount.minor)`.
  */
 
+/**
+ * DDL for the metadata table alone. `migrate` applies this (and reads the
+ * stored schema version) BEFORE the rest of {@link SCHEMA_STATEMENTS}: a
+ * build older than the stored version must refuse without executing DDL
+ * written for a schema a newer release may have reshaped.
+ */
+const META_TABLE_DDL = `CREATE TABLE IF NOT EXISTS pluts_ledger_meta (
+  key TEXT PRIMARY KEY NOT NULL,
+  value TEXT NOT NULL
+)`;
+
 export const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS pluts_accounts (
   id TEXT PRIMARY KEY NOT NULL,
@@ -52,10 +63,7 @@ export const SCHEMA_STATEMENTS: string[] = [
   // schema evolution needs a recorded version. Without this, bumping SCALE
   // would silently reinterpret every stored amount, and a mixed-currency
   // routing bug would be undetectable from the data.
-  `CREATE TABLE IF NOT EXISTS pluts_ledger_meta (
-  key TEXT PRIMARY KEY NOT NULL,
-  value TEXT NOT NULL
-)`,
+  META_TABLE_DDL,
 ];
 
 /**
@@ -125,6 +133,20 @@ export function migrate(
   sql: SqlStorage,
   opts: { currency?: string } = {},
 ): void {
+  // Rollback guard FIRST, before any other DDL: a newer release may have
+  // reshaped tables that this build's statements still reference, so a build
+  // older than the stored schema_version must refuse before executing any of
+  // them. Only the meta table (stable across versions by contract) is
+  // created ahead of the check.
+  sql.exec(META_TABLE_DDL).toArray();
+  const meta = getLedgerMeta(sql);
+  if (meta.schemaVersion > SCHEMA_VERSION) {
+    throw new RepositoryError(
+      `Ledger schema is version ${meta.schemaVersion} but this build supports up to ${SCHEMA_VERSION}; ` +
+        "deploy a build at or above the stored version instead of rolling back",
+    );
+  }
+
   for (const stmt of SCHEMA_STATEMENTS) {
     sql.exec(stmt).toArray();
   }
@@ -134,7 +156,6 @@ export function migrate(
   // a build compiled at scale 3 would silently reinterpret every stored
   // amount 10x smaller — refuse loudly and demand an explicit rescale
   // migration instead.
-  const meta = getLedgerMeta(sql);
 
   const stamp = (key: string, value: string) => {
     sql
@@ -157,17 +178,10 @@ export function migrate(
   }
   stamp("scale", String(SCALE));
 
-  // A database stamped by a newer release holds a schema this build has never
-  // seen — running against it (or "downgrading" the stamp) risks corrupting
-  // records. Older stored versions are upgraded here (versioned data steps go
-  // before this stamp as the schema evolves) and then advanced; 0 -> 1 needs
-  // no data steps because all v1 DDL is idempotent.
-  if (meta.schemaVersion > SCHEMA_VERSION) {
-    throw new RepositoryError(
-      `Ledger schema is version ${meta.schemaVersion} but this build supports up to ${SCHEMA_VERSION}; ` +
-        "deploy a build at or above the stored version instead of rolling back",
-    );
-  }
+  // Older stored versions were upgraded by the DDL above (versioned data
+  // steps go before this stamp as the schema evolves) and are now advanced;
+  // 0 -> 1 needs no data steps because all v1 DDL is idempotent. Newer
+  // stored versions were rejected before any DDL ran.
   sql
     .exec(
       "INSERT INTO pluts_ledger_meta (key, value) VALUES ('schema_version', ?) " +
