@@ -1,0 +1,11 @@
+// Test-only Worker config for the workerd integration suite
+// (@cloudflare/vitest-pool-workers). Not deployed anywhere.
+{
+  "name": "pluts-integration-tests",
+  "main": "./fixture.ts",
+  "compatibility_date": "2026-07-01",
+  "durable_objects": {
+    "bindings": [{ "name": "LEDGER_TEST", "class_name": "LedgerTestDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LedgerTestDO"] }]
+}

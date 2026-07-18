@@ -245,13 +245,17 @@ Rules (enforced via Zod schema + `superRefine`):
 ## Testing
 
 ```sh
-bun run test            # all tests
-bun run test:unit       # domain unit tests (in-memory, fast)
-bun run typecheck       # tsc --noEmit
-bun run lint            # biome
+npm test                             # both suites: unit + workerd integration
+npx vitest run --project unit        # fast unit suite (node:sqlite, in-memory)
+npx vitest run --project workerd     # real Durable Object SQLite (workerd)
+npm run typecheck                    # tsc --noEmit
+npm run lint                         # biome
 ```
 
-The unit tests cover amount math, balance computation for all account types and contra variants, entry validation, and the trial balance invariant, all against an in-memory `Repository`. The `SqlStorageRepository` (production) is exercised end-to-end by the [pluts-ledger-do](https://github.com/adamburmister/pluts-ledger-do) app's Durable Object.
+Two test layers:
+
+- **Unit** (`test/unit/`) — amount math, balance computation for all account types and contra variants, entry validation, the trial balance invariant, and the schema DDL semantics, against an in-memory `Repository` and `node:sqlite`.
+- **workerd integration** (`test/integration/`) — runs inside the actual Workers runtime via [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/), driving the production `SqlStorageRepository` and `migrate()` against a real SQLite-backed Durable Object's `ctx.storage` (no mocks). This is what proves the parts node:sqlite cannot: workerd's SQL authorizer, trigger behavior including the rowid sentinel, `transactionSync` atomicity, and the bind-type boundary.
 
 ## Development
 
