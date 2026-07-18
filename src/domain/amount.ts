@@ -153,7 +153,7 @@ export class Amount {
       order = eligible;
     } else if (policy === "last") {
       order = [...eligible].reverse();
-    } else {
+    } else if (policy === "largest") {
       const remainderOf = (i: number): bigint =>
         (this.minor * (ws[i] as bigint)) % weightSum;
       order = [...eligible].sort((a, b) => {
@@ -162,6 +162,10 @@ export class Amount {
         if (ra !== rb) return rb > ra ? 1 : -1;
         return a - b;
       });
+    } else {
+      // Untyped callers can pass a misspelled policy; treating it as the
+      // default would move the leftover cents while still summing correctly.
+      throw new RangeError(`Unknown remainder policy "${policy}"`);
     }
 
     for (const i of order) {

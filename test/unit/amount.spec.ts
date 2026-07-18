@@ -155,6 +155,18 @@ describe("Amount", () => {
       expect(() => ten.allocate([1, -1])).toThrow(RangeError);
       expect(() => ten.allocate([1.5, 1])).toThrow(RangeError);
     });
+
+    // A misspelled policy from untyped JS must fail fast, not silently run
+    // as "largest" — that could hand the leftover cents to different lines
+    // than intended while still returning a balanced-looking split.
+    it("rejects unknown remainder policies", () => {
+      const ten = Amount.fromMajor("10.00");
+      expect(() =>
+        ten.allocate([1, 1, 1], {
+          remainder: "frist" as unknown as "first",
+        }),
+      ).toThrow(RangeError);
+    });
   });
 
   describe("display", () => {
