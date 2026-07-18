@@ -12,13 +12,25 @@ npm run lint           # biome check src test
 npm run fix            # biome check --write src test
 npm run format         # biome format --write src test
 npm run typecheck      # tsc --noEmit
-npm test               # vitest run (all specs in test/**/*.spec.ts)
+npm test               # vitest run — BOTH projects: unit + workerd
+npx vitest run --project unit      # fast unit suite (node:sqlite fakes)
+npx vitest run --project workerd   # real DO SQLite (test/integration/)
 npx vitest run test/unit/amount.spec.ts   # single spec
 npx vitest             # watch mode
 ```
 
 **Verification order matters** (matches `.github/workflows/ci.yml`):
 `npm run lint` → `npm run typecheck` → `npm test`.
+
+## Testing rules
+
+- Write tests first (the repo's PRs follow red-green).
+- Any change to `src/db/schema.ts` or the repositories MUST keep the
+  `workerd` project green — it runs inside the actual Workers runtime and is
+  the authority on what DO SQLite accepts.
+- Test fakes for `SqlStorage` must forward `...binds`. node:sqlite silently
+  binds missing placeholders as NULL, so a fake that drops them stays green
+  while testing nothing (this has bitten twice).
 
 ## Architecture
 - `src/index.ts` is the public API barrel — all exports for consumers go through it.
@@ -35,8 +47,37 @@ npx vitest             # watch mode
 - **RPC/HTTP handlers must return DTOs** via `toEntryDTO` / `toAmountLineDTO` / `toAccountDTO` (exported from the package). `toJSON()` on `Amount` helps JSON but NOT RPC.
 - Raise `SCALE` only with a rescale migration on stored minor units.
 
+## Durable Object SQLite constraints (verified in test/integration/)
+- `SqlStorage` cannot bind `bigint`; amounts cross a JS-number boundary via
+  `toStorageInt`/`fromStorageInt`. The schema's 2^53−1 amount ceiling defends
+  against raw SQL literals, which need no bind.
+- `PRAGMA user_version` is unsupported; schema version lives in
+  `pluts_ledger_meta`. `PRAGMA table_info` is allowed.
+- `SqlStorage` handles must not escape their DO context (workerd throws
+  "Cannot perform I/O on behalf of a different Durable Object"). In tests,
+  do all storage work inside one `runInDurableObject` callback.
+- Authorizer-approved and relied upon: triggers with `RAISE(ABORT)`/`WHEN`,
+  `date()` in CHECKs, `sqlite_master` reads, explicit rowid writes,
+  `ON CONFLICT DO UPDATE`.
+
 ## Migrations
-No migration tool or tracking table. Schema = idempotent `CREATE TABLE/INDEX IF NOT EXISTS` in `src/db/schema.ts`; `migrate(ctx.storage.sql)` runs on every cold start. To change schema, edit `SCHEMA_STATEMENTS` and deploy; reset local DO state (`rm -rf .wrangler/state/v3/do`) for fresh-DB schema changes.
+No external migration tool. Schema = idempotent `CREATE TABLE/INDEX/TRIGGER
+IF NOT EXISTS` in `src/db/schema.ts`; `migrate(ctx.storage.sql)` runs on
+every cold start and stamps `pluts_ledger_meta` (scale, `schema_version`,
+optional currency). **Step order inside `migrate()` is load-bearing**: meta
+table + version rollback guard → legacy negative-rowid repair → seq ALTER →
+DDL loop → seq backfill → scale/version/currency stamps → payload_hash
+backfill. Future incompatible changes bump `SCHEMA_VERSION` and add explicit
+upgrade steps — never "reset the database". (Local dev scratch DBs can still
+be reset with `rm -rf .wrangler/state/v3/do` in the consuming app.)
+
+## Invariants that live at specific seams
+- Append-only + row validity are enforced by schema triggers, not just code.
+- `assertBalanced` (including per-line positivity) guards the persistence
+  seam; `buildEntry`'s Zod schema guards the facade. Both must hold.
+- The repository's concurrent-post recovery string-matches
+  "UNIQUE constraint failed" — trigger messages on `pluts_entry_keys` must
+  keep that phrase.
 
 ## CI / publish
 - `ci.yml`: lint → typecheck → test on push to `main` and all PRs.
