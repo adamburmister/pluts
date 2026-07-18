@@ -273,6 +273,28 @@ describe("schema hardening", () => {
       }
     });
 
+    // Amounts above Number.MAX_SAFE_INTEGER store fine as SQLite 64-bit
+    // integers but cannot cross the SqlStorage JS-number boundary on read —
+    // every later read/SUM would throw in fromStorageInt. Enforce the
+    // documented ceiling at write time instead.
+    it("rejects an amount above Number.MAX_SAFE_INTEGER", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-big', 'debit', 'acc-1', 'ent-1', ?)",
+          )
+          .run(9007199254740992n),
+      ).toThrow();
+      // The ceiling itself is still a valid amount.
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-max', 'debit', 'acc-1', 'ent-1', ?)",
+          )
+          .run(9007199254740991n),
+      ).not.toThrow();
+    });
+
     it("still accepts valid rows", () => {
       expect(() =>
         db

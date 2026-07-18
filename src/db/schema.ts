@@ -40,7 +40,7 @@ export const SCHEMA_STATEMENTS: string[] = [
   entry_id TEXT NOT NULL,
   amount INTEGER NOT NULL,
   CONSTRAINT pluts_amounts_type_check CHECK (type IN ('debit','credit')),
-  CONSTRAINT pluts_amounts_amount_check CHECK (typeof(amount) = 'integer' AND amount >= 0),
+  CONSTRAINT pluts_amounts_amount_check CHECK (typeof(amount) = 'integer' AND amount >= 0 AND amount <= 9007199254740991),
   FOREIGN KEY (account_id) REFERENCES pluts_accounts(id) ON UPDATE no action ON DELETE no action,
   FOREIGN KEY (entry_id) REFERENCES pluts_entries(id) ON UPDATE no action ON DELETE no action
 )`,
@@ -123,12 +123,16 @@ export const SCHEMA_STATEMENTS: string[] = [
   // INSERT triggers enforce the same rules on already-provisioned databases,
   // so a row written by non-library SQL is rejected loudly instead of being
   // silently excluded from every WHERE type = 'debit'/'credit' aggregate.
+  // The 9007199254740991 ceiling is Number.MAX_SAFE_INTEGER: larger values
+  // store fine as SQLite 64-bit integers but cannot cross the SqlStorage
+  // JS-number boundary on read, so every later read/SUM would throw.
   `CREATE TRIGGER IF NOT EXISTS pluts_amounts_validate_insert
   BEFORE INSERT ON pluts_amounts
   WHEN NEW.type NOT IN ('debit','credit')
     OR typeof(NEW.amount) != 'integer'
     OR NEW.amount < 0
-  BEGIN SELECT RAISE(ABORT, 'pluts: amount rows require type debit|credit and a non-negative integer amount'); END`,
+    OR NEW.amount > 9007199254740991
+  BEGIN SELECT RAISE(ABORT, 'pluts: amount rows require type debit|credit and a non-negative integer amount within the JS safe-integer range'); END`,
   // The GLOB checks shape only; date() round-tripping checks the calendar:
   // SQLite normalizes 2026-02-30 to 2026-03-02 (breaking equality) and
   // returns NULL for out-of-range fields like month 13.
