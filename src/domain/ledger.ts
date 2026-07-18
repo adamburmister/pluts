@@ -152,14 +152,13 @@ export class Ledger {
         payload.idempotencyKey,
       );
       if (keyRecord) {
-        if (keyRecord.payloadHash && keyRecord.payloadHash !== fingerprint) {
+        if (keyRecord.payloadHash !== fingerprint) {
           throw new IdempotencyConflictError(
             payload.idempotencyKey,
             keyRecord.entryId,
           );
         }
-        // Matching fingerprint (or a legacy row with no recorded hash):
-        // genuine retry, return the original.
+        // Matching fingerprint: genuine retry, return the original.
         const existing = await this.repo.getEntry(keyRecord.entryId);
         if (existing) return existing;
       }
