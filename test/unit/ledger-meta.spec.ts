@@ -76,3 +76,39 @@ describe("ledger metadata", () => {
     expect(getLedgerMeta(fakeSqlStorage(db)).currency).toBe("AUD");
   });
 });
+
+describe("migration safety", () => {
+  // A DO rolled back to an older build must not run against a schema stamped
+  // by a newer release — the older code has no idea what changed.
+  it("refuses to open a database stamped with a newer schema version", () => {
+    const db = new DatabaseSync(":memory:");
+    migrate(fakeSqlStorage(db));
+    db.prepare(
+      "UPDATE pluts_ledger_meta SET value = ? WHERE key = 'schema_version'",
+    ).run(String(SCHEMA_VERSION + 1));
+    expect(() => migrate(fakeSqlStorage(db))).toThrow(RepositoryError);
+  });
+
+  it("advances an older stored schema version to the current one", () => {
+    const db = new DatabaseSync(":memory:");
+    migrate(fakeSqlStorage(db));
+    db.prepare(
+      "UPDATE pluts_ledger_meta SET value = '0' WHERE key = 'schema_version'",
+    ).run();
+    migrate(fakeSqlStorage(db));
+    expect(getLedgerMeta(fakeSqlStorage(db)).schemaVersion).toBe(
+      SCHEMA_VERSION,
+    );
+  });
+
+  // A whitespace-only configured currency must not permanently stamp "" —
+  // that blank row is falsy in the mismatch check, so a later real currency
+  // would silently coexist with an unenforceable blank denomination.
+  it("treats a whitespace-only currency as absent", () => {
+    const db = new DatabaseSync(":memory:");
+    migrate(fakeSqlStorage(db), { currency: "   " });
+    expect(getLedgerMeta(fakeSqlStorage(db)).currency).toBeUndefined();
+    migrate(fakeSqlStorage(db), { currency: "USD" });
+    expect(getLedgerMeta(fakeSqlStorage(db)).currency).toBe("USD");
+  });
+});

@@ -156,10 +156,31 @@ export function migrate(
     );
   }
   stamp("scale", String(SCALE));
-  stamp("schema_version", String(SCHEMA_VERSION));
 
-  if (opts.currency) {
-    const currency = opts.currency.trim();
+  // A database stamped by a newer release holds a schema this build has never
+  // seen — running against it (or "downgrading" the stamp) risks corrupting
+  // records. Older stored versions are upgraded here (versioned data steps go
+  // before this stamp as the schema evolves) and then advanced; 0 -> 1 needs
+  // no data steps because all v1 DDL is idempotent.
+  if (meta.schemaVersion > SCHEMA_VERSION) {
+    throw new RepositoryError(
+      `Ledger schema is version ${meta.schemaVersion} but this build supports up to ${SCHEMA_VERSION}; ` +
+        "deploy a build at or above the stored version instead of rolling back",
+    );
+  }
+  sql
+    .exec(
+      "INSERT INTO pluts_ledger_meta (key, value) VALUES ('schema_version', ?) " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      String(SCHEMA_VERSION),
+    )
+    .toArray();
+
+  // Trim before the truthiness check: a whitespace-only configured currency
+  // must read as "not provided", not permanently stamp a blank denomination
+  // that the mismatch guard can never catch.
+  const currency = opts.currency?.trim();
+  if (currency) {
     if (meta.currency && meta.currency !== currency) {
       throw new RepositoryError(
         `Ledger is denominated in ${meta.currency}; refusing to open it as ${currency}`,
