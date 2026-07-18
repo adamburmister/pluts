@@ -356,3 +356,52 @@ describe("schema hardening", () => {
     });
   });
 });
+
+describe("legacy negative-rowid repair (migrate)", () => {
+  // Databases created before these guards can already hold rowid = -1 rows;
+  // the AFTER INSERT guard is not retroactive, and once the no_replace
+  // sentinel matches that row every ordinary insert aborts — with the new
+  // UPDATE triggers blocking any in-place repair. migrate() must reassign
+  // negative rowids BEFORE the triggers are created.
+  it("reassigns pre-existing negative rowids so posts keep working", async () => {
+    const { migrate } = await import("../../src/db/schema");
+    const db = new DatabaseSync(":memory:");
+    // Legacy schema: tables only, no triggers.
+    db.exec(`CREATE TABLE pluts_entries (
+      id TEXT PRIMARY KEY NOT NULL,
+      description TEXT NOT NULL,
+      date TEXT NOT NULL,
+      posted_at TEXT NOT NULL
+    )`);
+    db.prepare(
+      "INSERT INTO pluts_entries (rowid, id, description, date, posted_at) VALUES (-1, 'ent-legacy', 'old', '2026-01-05', '2026-01-05T10:00:00Z')",
+    ).run();
+
+    const fake = {
+      exec: (query: string, ...binds: Array<string | number | null>) => {
+        const rows = db.prepare(query).all(...binds);
+        return { toArray: () => rows, one: () => rows[0] };
+      },
+    } as unknown as import("@cloudflare/workers-types").SqlStorage;
+    migrate(fake);
+
+    // The legacy row survives with a positive rowid and intact data.
+    const row = db
+      .prepare(
+        "SELECT rowid, description FROM pluts_entries WHERE id = 'ent-legacy'",
+      )
+      .get() as { rowid: number; description: string };
+    expect(row.description).toBe("old");
+    expect(row.rowid).toBeGreaterThan(0);
+
+    // Ordinary inserts are not bricked by the sentinel.
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES ('ent-new', 'ok', '2026-01-06', '2026-01-06T10:00:00Z')",
+        )
+        .run(),
+    ).not.toThrow();
+    db.close();
+  });
+});

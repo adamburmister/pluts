@@ -202,6 +202,34 @@ export const SCHEMA_SQL: string = SCHEMA_STATEMENTS.map((s) => `${s};`).join(
  * ```
  */
 export function migrate(sql: SqlStorage): void {
+  // Repair legacy negative rowids BEFORE creating the triggers: databases
+  // provisioned without the append-only guards can already hold rows at
+  // rowid -1 (or other negatives). The no_replace guards read NEW.rowid = -1
+  // as "auto-assigned", so such a row would make every ordinary insert abort
+  // — and once the UPDATE triggers exist, the rowid can no longer be
+  // repaired. Reassignment is safe: nothing references rowid (all FKs use
+  // the TEXT ids), and this window predates the triggers.
+  for (const table of ["pluts_entries", "pluts_amounts", "pluts_entry_keys"]) {
+    const exists = sql
+      .exec(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        table,
+      )
+      .toArray();
+    if (exists.length === 0) continue;
+    const negatives = sql
+      .exec(`SELECT rowid FROM ${table} WHERE rowid < 0 ORDER BY rowid ASC`)
+      .toArray() as Array<{ rowid?: unknown }>;
+    for (const row of negatives) {
+      sql
+        .exec(
+          `UPDATE ${table} SET rowid = (SELECT MAX(0, COALESCE(MAX(rowid), 0)) + 1 FROM ${table}) WHERE rowid = ?`,
+          Number(row.rowid),
+        )
+        .toArray();
+    }
+  }
+
   for (const stmt of SCHEMA_STATEMENTS) {
     sql.exec(stmt).toArray();
   }
