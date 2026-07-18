@@ -181,8 +181,8 @@ describe("InMemoryRepository does not alias internal state", () => {
     // The audit (probe P7) pushed onto a returned entry.debitAmounts —
     // readonly is compile-time only — and the tampered line appeared in
     // subsequent allEntries() reads: the double aliased its internal arrays.
-    // The production repository re-hydrates per query and is immune; the
-    // double must behave the same.
+    // Entry now freezes its arrays (F-16), so the push itself throws; either
+    // way, later reads must come back clean.
     const { InMemoryRepository } = await import(
       "../helpers/in-memory-repository"
     );
@@ -195,7 +195,9 @@ describe("InMemoryRepository does not alias internal state", () => {
       credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
     });
 
-    (entry.debitAmounts as unknown as unknown[]).push("tampered");
+    expect(() =>
+      (entry.debitAmounts as unknown as unknown[]).push("tampered"),
+    ).toThrow(TypeError);
 
     const reread = await ledger.allEntries();
     expect(reread[0]?.debitAmounts).toHaveLength(1);
