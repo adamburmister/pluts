@@ -14,6 +14,39 @@ import { type AccountType, type DateRange, toDateISO } from "../domain/types";
 import type { Repository } from "./repository";
 
 /**
+ * Bridge a minor-units `bigint` onto SqlStorage's `number` bind type.
+ *
+ * SqlStorage cannot bind bigint, so every amount crosses an IEEE 754 boundary
+ * at this seam. `Number()` does not error on precision loss — above 2^53 it
+ * silently rounds, which for a ledger means corrupted money. Fail loudly
+ * instead. (The ~2^53 ceiling is ~$90T at scale 2; it shrinks to ~90M major
+ * units at scale 8, so the guard matters if SCALE is ever raised.)
+ */
+export function toStorageInt(minor: bigint): number {
+  if (minor > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RepositoryError(
+      `Amount ${minor} minor units exceeds the exact integer range of SqlStorage (2^53 - 1)`,
+    );
+  }
+  return Number(minor);
+}
+
+/**
+ * Bridge a `number` read from SQLite (row value or SUM aggregate) back to
+ * `bigint`. A non-integer or unsafe integer here means the stored data or an
+ * aggregate crossed the exact range — silent corruption territory — or a
+ * float reached the amount column through non-library SQL. Fail loudly.
+ */
+export function fromStorageInt(value: number, context: string): bigint {
+  if (!Number.isSafeInteger(value)) {
+    throw new RepositoryError(
+      `${context}: value ${value} is not an exact integer within SqlStorage's safe range`,
+    );
+  }
+  return BigInt(value);
+}
+
+/**
  * Raw row shapes (snake_case column names, as returned by SqlStorage cursors),
  * matching the columns defined in `./schema.ts`.
  */
@@ -202,6 +235,12 @@ export class SqlStorageRepository implements Repository {
     const id = uuid();
     const now = new Date().toISOString();
     const { debits, credits } = amountsFromPayload(payload, id);
+    // Bridge amounts to storage numbers up front, so an out-of-range amount
+    // fails before the transaction opens rather than mid-write.
+    const lines = [...debits, ...credits].map((a) => ({
+      record: a,
+      storageAmount: toStorageInt(a.amount.minor),
+    }));
 
     // The entry row, every amount row, and (if present) the idempotency-key row
     // must commit atomically. transactionSync runs its callback in one SQLite
@@ -218,7 +257,7 @@ export class SqlStorageRepository implements Repository {
           )
           .toArray();
 
-        for (const a of [...debits, ...credits]) {
+        for (const { record: a, storageAmount } of lines) {
           this.sql
             .exec(
               "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES (?, ?, ?, ?, ?)",
@@ -226,7 +265,7 @@ export class SqlStorageRepository implements Repository {
               a.kind,
               a.account.id,
               id,
-              Number(a.amount.minor),
+              storageAmount,
             )
             .toArray();
         }
@@ -327,7 +366,7 @@ export class SqlStorageRepository implements Repository {
         ...rangeClause.binds,
       )
       .one();
-    return Amount.fromMinor(BigInt(row.total ?? 0));
+    return Amount.fromMinor(fromStorageInt(row.total ?? 0, "sumByType"));
   }
 
   async amountsForAccount(accountId: string): Promise<AmountRecord[]> {
@@ -371,7 +410,7 @@ export class SqlStorageRepository implements Repository {
         ...rangeClause.binds,
       )
       .one();
-    return Amount.fromMinor(BigInt(row.total ?? 0));
+    return Amount.fromMinor(fromStorageInt(row.total ?? 0, "sumAmounts"));
   }
 
   /** Builds a fully-formed immutable Entry from a row, loading its amounts. */
@@ -417,7 +456,7 @@ export class SqlStorageRepository implements Repository {
         r.id,
         r.type as AmountKind,
         account,
-        Amount.fromMinor(BigInt(r.amount)),
+        Amount.fromMinor(fromStorageInt(r.amount, `amount ${r.id}`)),
         r.entry_id,
       );
     });
