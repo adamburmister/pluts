@@ -4,6 +4,7 @@ import { Amount } from "../../src/domain/amount";
 import {
   type AmountRecord,
   amountsFromPayload,
+  assertBalanced,
   Entry,
   type EntryPayload,
 } from "../../src/domain/entry";
@@ -55,7 +56,7 @@ export class InMemoryRepository implements Repository {
     type: AccountType;
     contra: boolean;
   }): Promise<Account> {
-    const key = `${input.name}\0${input.type}`;
+    const key = input.name;
     if (this.nameIndex.has(key)) {
       throw new ValidationError(
         [{ path: ["name"], message: "has already been taken" }],
@@ -103,6 +104,7 @@ export class InMemoryRepository implements Repository {
   }
 
   async insertEntry(payload: EntryPayload): Promise<Entry> {
+    assertBalanced(payload);
     const id = uuid();
     const now = new Date().toISOString();
     const { debits, credits } = amountsFromPayload(payload, id);

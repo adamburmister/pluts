@@ -10,6 +10,7 @@ import { ValidationError } from "./errors";
 import {
   type CreateAccountInput,
   createAccountSchema,
+  dateRangeSchema,
   type EntryInput,
   toIssues,
 } from "./schemas";
@@ -69,6 +70,28 @@ function asOfRange(asOf?: Date | string): DateRange | undefined {
  */
 export class Ledger {
   constructor(private readonly repo: Repository) {}
+
+  /**
+   * Validate and normalize an optional date range before it reaches the
+   * repository. Range bounds filter entries by lexicographic comparison, so a
+   * malformed bound would silently mis-filter every period report (F-02).
+   * Throws {@link ValidationError} on malformed bounds.
+   */
+  private parseRange(range?: DateRange): DateRange | undefined {
+    const parsed = dateRangeSchema.safeParse(range);
+    if (!parsed.success) {
+      throw new ValidationError(
+        toIssues(parsed.error.issues),
+        "Invalid date range",
+      );
+    }
+    if (!parsed.data) return undefined;
+    const { fromDate, toDate } = parsed.data;
+    return {
+      ...(fromDate !== undefined ? { fromDate } : {}),
+      ...(toDate !== undefined ? { toDate } : {}),
+    };
+  }
 
   async createAccount(input: CreateAccountInput): Promise<Account> {
     const parsed = createAccountSchema.safeParse(input);
@@ -132,15 +155,17 @@ export class Ledger {
 
   /** Balance of a single account, optionally within a date range. */
   async accountBalance(account: Account, range?: DateRange): Promise<bigint> {
+    const parsedRange = this.parseRange(range);
     const [credits, debits] = await Promise.all([
-      this.repo.sumCredits(account.id, range),
-      this.repo.sumDebits(account.id, range),
+      this.repo.sumCredits(account.id, parsedRange),
+      this.repo.sumDebits(account.id, parsedRange),
     ]);
     return computeBalance(account.type, account.contra, credits, debits);
   }
 
   /** Aggregate balance of all accounts of a type (contra accounts subtracted). */
   async balanceByType(type: AccountType, range?: DateRange): Promise<bigint> {
+    range = this.parseRange(range);
     const accounts = await this.repo.getAccountsByType(type);
     const balances = await Promise.all(
       accounts.map(async (a) => ({
@@ -161,7 +186,7 @@ export class Ledger {
    * from-date is deliberately unrepresentable here.
    */
   async trialBalance(asOf?: Date | string): Promise<bigint> {
-    const range = asOfRange(asOf);
+    const range = this.parseRange(asOfRange(asOf));
     const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
       this.balanceByType(AccountType.Asset, range),
       this.balanceByType(AccountType.Liability, range),
@@ -178,7 +203,7 @@ export class Ledger {
    * whole ledger balances. Point-in-time (cumulative up to `asOf`).
    */
   async trialBalanceReport(asOf?: Date | string): Promise<TrialBalanceReport> {
-    const range = asOfRange(asOf);
+    const range = this.parseRange(asOfRange(asOf));
     const accounts = await this.repo.allAccounts();
     const rows: TrialBalanceRow[] = [];
     let totalDebits = 0n;
@@ -215,7 +240,7 @@ export class Ledger {
    * {@link incomeStatement} for period (flow) reporting.
    */
   async balanceSheet(asOf?: Date | string): Promise<BalanceSheet> {
-    const range = asOfRange(asOf);
+    const range = this.parseRange(asOfRange(asOf));
     const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
       this.balanceByType(AccountType.Asset, range),
       this.balanceByType(AccountType.Liability, range),
@@ -236,6 +261,7 @@ export class Ledger {
   }
 
   async incomeStatement(range?: DateRange): Promise<IncomeStatement> {
+    range = this.parseRange(range);
     const [revenue, expenses] = await Promise.all([
       this.balanceByType(AccountType.Revenue, range),
       this.balanceByType(AccountType.Expense, range),

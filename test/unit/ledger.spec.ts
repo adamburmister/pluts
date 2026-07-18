@@ -31,6 +31,16 @@ describe("Ledger (in-memory)", () => {
       ).rejects.toBeInstanceOf(ValidationError);
     });
 
+    // F-01: names must be unique across ALL types. Two accounts named "Cash"
+    // with different types would make name-based posting ambiguous — the
+    // debit would land on whichever row the lookup returned first.
+    it("rejects duplicate names across different account types", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await expect(
+        ledger.createAccount({ name: "Cash", type: AccountType.Liability }),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
     it("creates contra accounts", async () => {
       const acc = await ledger.createAccount({
         name: "Drawing",
@@ -208,6 +218,35 @@ describe("Ledger (in-memory)", () => {
         toDate: "2024-02-01",
       });
       expect(formatAmount(partial)).toBe("100.00");
+    });
+
+    // F-02: range parameters were passed to the repository unvalidated; a
+    // malformed bound silently mis-filters every period report.
+    it("rejects malformed date-range bounds with ValidationError", async () => {
+      const cash = await ledger.createAccount({
+        name: "Cash",
+        type: AccountType.Asset,
+      });
+      await expect(
+        ledger.accountBalance(cash, { fromDate: "2024-1-5" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.balanceByType(AccountType.Asset, { toDate: "garbage" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      // trialBalance/balanceSheet take an as-of date (F-09); malformed
+      // as-of values must still fail validation (F-02).
+      await expect(ledger.trialBalance("2024-02-30")).rejects.toBeInstanceOf(
+        ValidationError,
+      );
+      await expect(ledger.balanceSheet("not-a-date")).rejects.toBeInstanceOf(
+        ValidationError,
+      );
+      await expect(
+        ledger.trialBalanceReport("2024-1-5"),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.incomeStatement({ fromDate: "2024/01/01" }),
+      ).rejects.toBeInstanceOf(ValidationError);
     });
 
     it("subtracts contra accounts in balanceByType", async () => {

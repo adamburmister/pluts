@@ -5,6 +5,7 @@ import {
   type AmountKind,
   AmountRecord,
   amountsFromPayload,
+  assertBalanced,
   Entry,
   type EntryPayload,
 } from "../domain/entry";
@@ -193,6 +194,11 @@ export class SqlStorageRepository implements Repository {
   }
 
   async insertEntry(payload: EntryPayload): Promise<Entry> {
+    // The double-entry invariant is enforced here, at the persistence seam —
+    // not only in the Ledger facade. EntryPayload is structurally
+    // constructible, so a hand-built unbalanced payload must be rejected
+    // before any row is written.
+    assertBalanced(payload);
     const id = uuid();
     const now = new Date().toISOString();
     const { debits, credits } = amountsFromPayload(payload, id);
