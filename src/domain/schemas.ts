@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Account } from "./account";
 import { Amount } from "./amount";
 import type { ValidationIssue } from "./errors";
-import { AccountType, toDateISO } from "./types";
+import { AccountType, isValidISODate, toDateISO } from "./types";
 
 /**
  * Amount input: accepts an already-built {@link Amount}, a non-negative finite
@@ -22,10 +22,37 @@ export const amountSchema = z
     z.number().finite().nonnegative(),
     z.string().regex(/^\d+(\.\d+)?$/),
   ])
-  .transform((v) => (v instanceof Amount ? v : Amount.fromMajor(v)));
+  .transform((v, ctx) => {
+    if (v instanceof Amount) return v;
+    // Amount.fromMajor throws RangeError on values its digit parser cannot
+    // represent (e.g. 1e21 stringifies in exponential notation). Schema
+    // transforms must never throw raw errors — report a Zod issue so callers
+    // get the promised path-tagged ValidationError.
+    try {
+      return Amount.fromMajor(v);
+    } catch (e) {
+      ctx.addIssue({
+        code: "custom",
+        message: e instanceof Error ? e.message : "Invalid amount",
+      });
+      return z.NEVER;
+    }
+  });
 
-/** A `Date | string` normalized to an ISO `yyyy-mm-dd` string. */
-const isoDateSchema = z.union([z.date(), z.string()]).transform(toDateISO);
+/**
+ * A `Date | string` normalized to a strict ISO `yyyy-mm-dd` string. String
+ * inputs must be zero-padded, calendar-valid ISO dates: range queries compare
+ * dates lexicographically, so any other format silently mis-buckets the entry
+ * in period reports (F-02).
+ */
+const isoDateSchema = z
+  .union([
+    z.date(),
+    z.string().refine(isValidISODate, {
+      message: "must be a valid yyyy-mm-dd date",
+    }),
+  ])
+  .transform(toDateISO);
 
 /** Optional inclusive date range, normalized to ISO strings. */
 export const dateRangeSchema = z

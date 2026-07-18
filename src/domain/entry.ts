@@ -1,5 +1,11 @@
 import type { Account } from "./account.js";
 import type { Amount } from "./amount.js";
+import {
+  type AmountLineDTO,
+  type EntryDTO,
+  toAmountLineDTO,
+  toEntryDTO,
+} from "./dto.js";
 import { ValidationError, type ValidationIssue } from "./errors.js";
 import {
   type AmountLine,
@@ -27,6 +33,13 @@ export interface EntryPayload {
   readonly idempotencyKey?: string;
   readonly description: string;
   readonly date: string;
+  /**
+   * True when {@link date} was defaulted to "today" because the caller
+   * omitted it. Excludes the resolved date from the idempotency fingerprint
+   * so a date-less retry still matches after a UTC day rollover. Not
+   * persisted.
+   */
+  readonly dateWasDefaulted?: true;
   readonly debits: readonly ResolvedAmountLine[];
   readonly credits: readonly ResolvedAmountLine[];
 }
@@ -43,14 +56,12 @@ export class AmountRecord {
     readonly entryId: string,
   ) {}
 
-  toJSON(): Record<string, unknown> {
-    return {
-      id: this.id,
-      kind: this.kind,
-      accountId: this.account.id,
-      amount: this.amount.toMajor(),
-      entryId: this.entryId,
-    };
+  /**
+   * Serialize via the DTO mapper so there is exactly one wire shape for a
+   * line, whether it is stringified alone or inside an {@link Entry}.
+   */
+  toJSON(): AmountLineDTO {
+    return toAmountLineDTO(this);
   }
 }
 
@@ -77,28 +88,67 @@ export class Entry {
      */
     readonly seq: number | null = null,
   ) {}
+    // `readonly T[]` is compile-time only; freeze so a runtime push on a
+    // posted entry throws instead of silently mutating the object.
+    Object.freeze(debitAmounts);
+    Object.freeze(creditAmounts);
+  }
 
-  toJSON(): Record<string, unknown> {
-    return {
-      id: this.id,
-      description: this.description,
-      date: this.date,
-      seq: this.seq,
-      debitAmounts: this.debitAmounts.map((d) => ({
-        ...d,
-        amount: d.amount.toMajor(),
-      })),
-      creditAmounts: this.creditAmounts.map((c) => ({
-        ...c,
-        amount: c.amount.toMajor(),
-      })),
-      postedAt: this.postedAt,
-    };
+  /** Serialize via the DTO mapper — one wire shape (see {@link toEntryDTO}). */
+  toJSON(): EntryDTO {
+    return toEntryDTO(this);
   }
 }
 
 function newId(): string {
   return crypto.randomUUID();
+}
+
+/**
+ * Assert the double-entry invariant on a payload about to be persisted:
+ * at least one debit, at least one credit, sum(debits) === sum(credits),
+ * and a non-zero total. Throws {@link ValidationError} otherwise.
+ *
+ * {@link buildEntry} already enforces this via the input schema, but
+ * {@link EntryPayload} is a structural interface — nothing stops a caller
+ * (or a third-party Repository port) from hand-constructing an unbalanced
+ * payload and passing it straight to `insertEntry`. Every `Repository`
+ * implementation MUST call this before persisting; the invariant belongs to
+ * the persistence seam, not just the input facade.
+ */
+export function assertBalanced(payload: EntryPayload): void {
+  const issues: ValidationIssue[] = [];
+  if (payload.debits.length === 0) {
+    issues.push({
+      path: ["debits"],
+      message: "Entry must have at least one debit amount",
+    });
+  }
+  if (payload.credits.length === 0) {
+    issues.push({
+      path: ["credits"],
+      message: "Entry must have at least one credit amount",
+    });
+  }
+  const debitSum = payload.debits.reduce((acc, l) => acc + l.amount.minor, 0n);
+  const creditSum = payload.credits.reduce(
+    (acc, l) => acc + l.amount.minor,
+    0n,
+  );
+  if (debitSum !== creditSum) {
+    issues.push({
+      path: [],
+      message: "The credit and debit amounts are not equal",
+    });
+  } else if (debitSum === 0n && issues.length === 0) {
+    issues.push({
+      path: [],
+      message: "Entry amounts must be greater than zero",
+    });
+  }
+  if (issues.length > 0) {
+    throw new ValidationError(issues, "Unbalanced entry");
+  }
 }
 
 /**
@@ -169,8 +219,46 @@ export function buildEntry(
     debits: resolvedDebits,
     credits: resolvedCredits,
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(parsed.data.date === undefined ? { dateWasDefaulted: true } : {}),
   };
   return payload;
+}
+
+/**
+ * Compute a stable fingerprint of an entry payload's business content:
+ * SHA-256 (hex) over description, date, and the ordered debit/credit lines
+ * (account id + minor units). Stored beside the idempotency key so a retry
+ * can be told apart from a key collision: identical fingerprint => genuine
+ * retry (return the original entry); different fingerprint => client bug
+ * (throw {@link IdempotencyConflictError} rather than silently dropping the
+ * second transaction).
+ *
+ * The date is hashed as the *caller* supplied it — `null` when it was
+ * defaulted — so a date-less retry fingerprints identically even after a UTC
+ * day rollover.
+ */
+export async function computeEntryFingerprint(
+  payload: EntryPayload,
+): Promise<string> {
+  const canonical = JSON.stringify({
+    description: payload.description,
+    date: payload.dateWasDefaulted ? null : payload.date,
+    debits: payload.debits.map((l) => [
+      l.account.id,
+      l.amount.minor.toString(),
+    ]),
+    credits: payload.credits.map((l) => [
+      l.account.id,
+      l.amount.minor.toString(),
+    ]),
+  });
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonical),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 /** Build {@link AmountRecord}s from a payload, assigning fresh ids. */

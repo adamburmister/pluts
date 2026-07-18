@@ -19,7 +19,11 @@ export const SCHEMA_STATEMENTS: string[] = [
   created_at TEXT NOT NULL,
   CONSTRAINT pluts_accounts_type_check CHECK (type IN ('Asset','Liability','Equity','Revenue','Expense'))
 )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS pluts_accounts_name_type_idx ON pluts_accounts (name, type)`,
+  // Account names are unique per ledger across ALL types. A (name, type)
+  // uniqueness would let two accounts share a name (e.g. an Asset "Cash" and a
+  // Liability "Cash"), making name-based entry posting ambiguous — the amount
+  // would land on whichever row the lookup happened to return first.
+  `CREATE UNIQUE INDEX IF NOT EXISTS pluts_accounts_name_idx ON pluts_accounts (name)`,
   `CREATE INDEX IF NOT EXISTS pluts_accounts_type_idx ON pluts_accounts (type, name)`,
   `CREATE TABLE IF NOT EXISTS pluts_entries (
   id TEXT PRIMARY KEY NOT NULL,
@@ -51,6 +55,7 @@ export const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS pluts_entry_keys (
   key TEXT PRIMARY KEY NOT NULL,
   entry_id TEXT NOT NULL,
+  payload_hash TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (entry_id) REFERENCES pluts_entries(id) ON UPDATE no action ON DELETE no action
 )`,
 ];
@@ -121,6 +126,21 @@ export function migrate(sql: SqlStorage): void {
         "UPDATE pluts_entries SET seq = ? WHERE id = ?",
         nextSeq,
         String(row.id),
+  }
+
+  // Databases provisioned before payload fingerprints existed lack the
+  // payload_hash column (CREATE TABLE IF NOT EXISTS skips them). ALTER TABLE
+  // is not idempotent, so probe first via table_info — an allowed pragma in
+  // Durable Object SQL storage. Legacy key rows keep the '' default, which
+  // the dedup path treats as "no recorded fingerprint" (match anything), so
+  // retries of pre-upgrade postings keep working.
+  const keyColumns = sql
+    .exec("PRAGMA table_info(pluts_entry_keys)")
+    .toArray() as Array<{ name?: unknown }>;
+  if (!keyColumns.some((c) => c.name === "payload_hash")) {
+    sql
+      .exec(
+        "ALTER TABLE pluts_entry_keys ADD COLUMN payload_hash TEXT NOT NULL DEFAULT ''",
       )
       .toArray();
   }

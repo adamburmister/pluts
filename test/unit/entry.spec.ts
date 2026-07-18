@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Account } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
-import { buildEntry } from "../../src/domain/entry";
+import { buildEntry, computeEntryFingerprint } from "../../src/domain/entry";
 import { ValidationError, type ValidationIssue } from "../../src/domain/errors";
 import type { EntryInput } from "../../src/domain/schemas";
 import { AccountType } from "../../src/domain/types";
@@ -163,6 +163,29 @@ describe("buildEntry", () => {
     expect(payload.date).toBe("2024-01-15");
   });
 
+  // F-02: dates are compared lexicographically in range queries, so anything
+  // other than strict zero-padded yyyy-mm-dd silently falls out of (or into)
+  // the wrong reporting period. Malformed dates must be rejected, not stored.
+  it("rejects a non-zero-padded date string", () => {
+    const msgs = issuesFor(baseInput({ date: "2026-1-5" }));
+    expect(msgs.some((m) => m.path.includes("date"))).toBe(true);
+  });
+
+  it("rejects a non-date string", () => {
+    const msgs = issuesFor(baseInput({ date: "not-a-date" }));
+    expect(msgs.some((m) => m.path.includes("date"))).toBe(true);
+  });
+
+  it("rejects an impossible calendar date", () => {
+    const msgs = issuesFor(baseInput({ date: "2026-02-30" }));
+    expect(msgs.some((m) => m.path.includes("date"))).toBe(true);
+  });
+
+  it("rejects an invalid Date object", () => {
+    const msgs = issuesFor(baseInput({ date: new Date("garbage") }));
+    expect(msgs.some((m) => m.path.includes("date"))).toBe(true);
+  });
+
   it("resolves accounts by name via the resolver", () => {
     const cash = acct("Cash");
     const rev = acct("Revenue", AccountType.Revenue);
@@ -201,6 +224,22 @@ describe("buildEntry", () => {
     );
   });
 
+  // F-12: 1e-7 stringifies as "1e-7"; the amount transform used to throw a
+  // raw RangeError from inside Zod — a crash instead of a validation failure,
+  // violating the "safeParse must never throw" doctrine.
+  it("fails cleanly (not crashes) for scientific-notation number amounts", () => {
+    const msgs = issuesFor({
+      description: "x",
+      debits: [{ account: acct("Cash"), amount: 1e-7 }],
+      credits: [{ account: acct("Rev", AccountType.Revenue), amount: 1e-7 }],
+    });
+    // 1e-7 rounds to $0.00 at scale 2; the entry is rejected as zero-total —
+    // via ValidationError issues, never a raw throw.
+    expect(msgs.some((m) => m.message.includes("greater than zero"))).toBe(
+      true,
+    );
+  });
+
   it("accepts raw number amounts (Zod transform)", () => {
     const payload = buildEntry({
       description: "x",
@@ -215,5 +254,57 @@ describe("buildEntry", () => {
     if (!credit) throw new Error("no credit");
     expect(debit.amount.toMajor()).toBe("100.00");
     expect(credit.amount.toMajor()).toBe("100.00");
+  });
+});
+
+describe("amount transform error shaping", () => {
+  // Numbers like 1e21 pass z.number().finite().nonnegative() but stringify
+  // in exponential notation. Amount.fromMajor now parses that notation, and
+  // the schema transform wraps any residual parse failure as a Zod issue —
+  // either way, buildEntry must never leak a raw RangeError.
+  it("handles exponential-notation numbers without raw throws", () => {
+    const payload = buildEntry(
+      baseInput({
+        debits: [{ account: acct("Cash"), amount: 1e21 }],
+        credits: [{ account: acct("Rev", AccountType.Revenue), amount: 1e21 }],
+      }),
+    );
+    expect(payload.debits[0]?.amount.toMajor()).toBe(
+      `${"1".padEnd(22, "0")}.00`,
+    );
+  });
+});
+
+describe("computeEntryFingerprint", () => {
+  // A retry of a date-less request is still the same request even if it
+  // arrives after a UTC day rollover: the fingerprint must hash what the
+  // caller sent (date omitted), not the day the retry happened to land on.
+  // Otherwise a delayed retry throws IdempotencyConflictError instead of
+  // returning the original entry.
+  it("is stable across a day boundary when the caller omitted the date", async () => {
+    const input = baseInput({ idempotencyKey: "req-1" });
+    const day1 = buildEntry(
+      input,
+      () => null,
+      () => new Date("2026-07-05T23:59:59Z"),
+    );
+    const day2 = buildEntry(
+      input,
+      () => null,
+      () => new Date("2026-07-06T00:00:01Z"),
+    );
+    expect(day1.date).toBe("2026-07-05");
+    expect(day2.date).toBe("2026-07-06");
+    expect(await computeEntryFingerprint(day2)).toBe(
+      await computeEntryFingerprint(day1),
+    );
+  });
+
+  it("distinguishes explicitly different dates", async () => {
+    const a = buildEntry(baseInput({ date: "2026-01-05" }));
+    const b = buildEntry(baseInput({ date: "2026-01-06" }));
+    expect(await computeEntryFingerprint(a)).not.toBe(
+      await computeEntryFingerprint(b),
+    );
   });
 });
