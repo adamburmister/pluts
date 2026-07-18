@@ -330,8 +330,10 @@ describe("Ledger (in-memory)", () => {
     /**
      * A point-in-time trial balance (entries up to a date) must still net to
      * zero: every balanced entry is self-cancelling across account types.
+     * F-09: the parameter is an as-of date, not a range — a "from-scoped"
+     * trial balance is not a statement an accountant can name.
      */
-    it("is zero within a date range", async () => {
+    it("is zero as of any date", async () => {
       await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
       await ledger.createAccount({
         name: "Revenue",
@@ -356,12 +358,75 @@ describe("Ledger (in-memory)", () => {
       });
 
       expect(await ledger.trialBalance()).toBe(0n);
-      expect(await ledger.trialBalance({ toDate: "2024-02-01" })).toBe(0n);
-      expect(await ledger.trialBalance({ fromDate: "2024-06-01" })).toBe(0n);
+      expect(await ledger.trialBalance("2024-02-01")).toBe(0n);
+      expect(await ledger.trialBalance(new Date("2024-12-31"))).toBe(0n);
+    });
+  });
+
+  describe("trialBalanceReport", () => {
+    it("lists each account in debit/credit columns with equal totals", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await ledger.createAccount({ name: "Equity", type: AccountType.Equity });
+      await ledger.createAccount({ name: "Exp", type: AccountType.Expense });
+
+      await ledger.postEntry({
+        description: "Invest",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(1000) }],
+        credits: [{ accountName: "Equity", amount: Amount.fromMajor(1000) }],
+      });
+      await ledger.postEntry({
+        description: "Spend",
+        debits: [{ accountName: "Exp", amount: Amount.fromMajor(400) }],
+        credits: [{ accountName: "Cash", amount: Amount.fromMajor(400) }],
+      });
+
+      const report = await ledger.trialBalanceReport();
+      const byName = new Map(report.rows.map((r) => [r.account.name, r]));
+      // Cash: 1000 dr - 400 cr = 600 debit-column balance.
+      expect(byName.get("Cash")?.debit).toBe(60000n);
+      expect(byName.get("Cash")?.credit).toBe(0n);
+      // Equity: 1000 credit-column balance.
+      expect(byName.get("Equity")?.debit).toBe(0n);
+      expect(byName.get("Equity")?.credit).toBe(100000n);
+      // Expense: 400 debit-column balance.
+      expect(byName.get("Exp")?.debit).toBe(40000n);
+      // The proof: total debits === total credits.
+      expect(report.totalDebits).toBe(report.totalCredits);
+      expect(report.totalDebits).toBe(100000n);
+      expect(report.balanced).toBe(true);
     });
   });
 
   describe("reports", () => {
+    // F-09: a balance sheet is point-in-time — cumulative from inception to
+    // an as-of date. The old DateRange parameter allowed a fromDate-scoped
+    // "balance sheet" of period deltas, which is not a balance sheet.
+    it("reports cumulative balances as of a date", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await ledger.createAccount({ name: "Equity", type: AccountType.Equity });
+      await ledger.createAccount({ name: "Exp", type: AccountType.Expense });
+      await ledger.postEntry({
+        description: "Invest",
+        date: "2024-01-10",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(500) }],
+        credits: [{ accountName: "Equity", amount: Amount.fromMajor(500) }],
+      });
+      await ledger.postEntry({
+        description: "Spend",
+        date: "2024-02-10",
+        debits: [{ accountName: "Exp", amount: Amount.fromMajor(200) }],
+        credits: [{ accountName: "Cash", amount: Amount.fromMajor(200) }],
+      });
+
+      const asOfJan = await ledger.balanceSheet("2024-01-31");
+      expect(formatAmount(asOfJan.assets)).toBe("500.00");
+      expect(asOfJan.balanced).toBe(0n);
+
+      const latest = await ledger.balanceSheet();
+      expect(formatAmount(latest.assets)).toBe("300.00");
+      expect(latest.balanced).toBe(0n);
+    });
+
     it("produces a balance sheet that balances", async () => {
       await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
       await ledger.createAccount({ name: "Equity", type: AccountType.Equity });

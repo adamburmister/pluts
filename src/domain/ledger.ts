@@ -36,6 +36,33 @@ export interface IncomeStatement {
 }
 
 /**
+ * One line of a classic trial balance: the account's net balance placed in
+ * its debit or credit column (the other column is 0n). Minor units.
+ */
+export interface TrialBalanceRow {
+  account: Account;
+  debit: bigint;
+  credit: bigint;
+}
+
+/**
+ * The classic trial balance listing: every account with its balance in the
+ * debit or credit column. `totalDebits === totalCredits` (i.e. `balanced`)
+ * is the whole-ledger proof an auditor expects to run.
+ */
+export interface TrialBalanceReport {
+  rows: TrialBalanceRow[];
+  totalDebits: bigint;
+  totalCredits: bigint;
+  balanced: boolean;
+}
+
+/** Normalize an optional as-of date to the DateRange the repository expects. */
+function asOfRange(asOf?: Date | string): DateRange | undefined {
+  return asOf === undefined ? undefined : { toDate: asOf };
+}
+
+/**
  * High-level facade over a {@link Repository}. Provides the accounting
  * operations of the Pluts domain: account creation, entry posting, and
  * balance/report queries. This is the primary public API surface.
@@ -127,11 +154,14 @@ export class Ledger {
 
   /**
    * Trial balance: should always be zero for a balanced ledger.
-   * Asset - (Liability + Equity + Revenue - Expense). Optionally scoped to a
-   * date range (all entries up to/within the range), matching `balanceSheet`
-   * and `incomeStatement`.
+   * Asset - (Liability + Equity + Revenue - Expense).
+   *
+   * Point-in-time: cumulative over all entries up to and including `asOf`
+   * (default: everything). A trial balance is not a period statement, so a
+   * from-date is deliberately unrepresentable here.
    */
-  async trialBalance(range?: DateRange): Promise<bigint> {
+  async trialBalance(asOf?: Date | string): Promise<bigint> {
+    const range = asOfRange(asOf);
     const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
       this.balanceByType(AccountType.Asset, range),
       this.balanceByType(AccountType.Liability, range),
@@ -142,7 +172,50 @@ export class Ledger {
     return assets - (liabilities + equity + revenue - expenses);
   }
 
-  async balanceSheet(range?: DateRange): Promise<BalanceSheet> {
+  /**
+   * The classic trial balance listing: every account with its net balance in
+   * the debit or credit column, plus column totals. Equal totals prove the
+   * whole ledger balances. Point-in-time (cumulative up to `asOf`).
+   */
+  async trialBalanceReport(asOf?: Date | string): Promise<TrialBalanceReport> {
+    const range = asOfRange(asOf);
+    const accounts = await this.repo.allAccounts();
+    const rows: TrialBalanceRow[] = [];
+    let totalDebits = 0n;
+    let totalCredits = 0n;
+    for (const account of accounts) {
+      const [credits, debits] = await Promise.all([
+        this.repo.sumCredits(account.id, range),
+        this.repo.sumDebits(account.id, range),
+      ]);
+      // Raw debit/credit arithmetic, independent of account type or contra
+      // flag: the net lands in whichever column it favors.
+      const net = debits.minor - credits.minor;
+      const row: TrialBalanceRow =
+        net >= 0n
+          ? { account, debit: net, credit: 0n }
+          : { account, debit: 0n, credit: -net };
+      rows.push(row);
+      totalDebits += row.debit;
+      totalCredits += row.credit;
+    }
+    return {
+      rows,
+      totalDebits,
+      totalCredits,
+      balanced: totalDebits === totalCredits,
+    };
+  }
+
+  /**
+   * Balance sheet as of a date: cumulative from inception to `asOf`
+   * (default: everything). Point-in-time by construction — a "balance sheet
+   * for a period" is not a statement an accountant can name, so the previous
+   * DateRange parameter (which permitted a fromDate) is gone; use
+   * {@link incomeStatement} for period (flow) reporting.
+   */
+  async balanceSheet(asOf?: Date | string): Promise<BalanceSheet> {
+    const range = asOfRange(asOf);
     const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
       this.balanceByType(AccountType.Asset, range),
       this.balanceByType(AccountType.Liability, range),
