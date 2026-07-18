@@ -36,6 +36,8 @@ export interface EntryDTO {
   id: string;
   description: string;
   date: string;
+  /** Monotonic journal number; null for entries built outside a repository. */
+  seq: number | null;
   debitAmounts: AmountLineDTO[];
   creditAmounts: AmountLineDTO[];
   postedAt: string;
@@ -70,6 +72,7 @@ export function toEntryDTO(entry: Entry): EntryDTO {
     id: entry.id,
     description: entry.description,
     date: entry.date,
+    seq: entry.seq,
     debitAmounts: entry.debitAmounts.map(toAmountLineDTO),
     creditAmounts: entry.creditAmounts.map(toAmountLineDTO),
     postedAt: entry.postedAt,

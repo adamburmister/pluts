@@ -25,9 +25,16 @@ export const SCHEMA_STATEMENTS: string[] = [
   id TEXT PRIMARY KEY NOT NULL,
   description TEXT NOT NULL,
   date TEXT NOT NULL,
-  posted_at TEXT NOT NULL
+  posted_at TEXT NOT NULL,
+  seq INTEGER
 )`,
   `CREATE INDEX IF NOT EXISTS pluts_entries_date_idx ON pluts_entries (date)`,
+  // Journal numbering (audit finding F-08): a journal is a chronological,
+  // *numbered* record. seq is assigned monotonically at insert (MAX(seq)+1
+  // inside the posting transaction — safe under the DO single-writer model),
+  // giving citable entry numbers, deterministic (date, seq) ordering, and a
+  // one-query completeness check: MAX(seq) = COUNT(*) iff nothing is missing.
+  `CREATE UNIQUE INDEX IF NOT EXISTS pluts_entries_seq_idx ON pluts_entries (seq)`,
   `CREATE TABLE IF NOT EXISTS pluts_amounts (
   id TEXT PRIMARY KEY NOT NULL,
   type TEXT NOT NULL,
@@ -77,6 +84,22 @@ export const SCHEMA_SQL: string = SCHEMA_STATEMENTS.map((s) => `${s};`).join(
  * ```
  */
 export function migrate(sql: SqlStorage): void {
+  // Legacy upgrade, before the DDL loop so the seq unique index can be
+  // created: databases provisioned before journal numbering lack the seq
+  // column (CREATE TABLE IF NOT EXISTS skips them). ALTER TABLE is not
+  // idempotent, so probe via table_info (an allowed pragma in DO SQL
+  // storage). Backfill numbers existing entries by rowid — insertion order,
+  // which is the posting order (the library never deletes).
+  const entryColumns = sql
+    .exec("PRAGMA table_info(pluts_entries)")
+    .toArray() as Array<{ name?: unknown }>;
+  if (entryColumns.length > 0 && !entryColumns.some((c) => c.name === "seq")) {
+    sql.exec("ALTER TABLE pluts_entries ADD COLUMN seq INTEGER").toArray();
+    sql
+      .exec("UPDATE pluts_entries SET seq = rowid WHERE seq IS NULL")
+      .toArray();
+  }
+
   for (const stmt of SCHEMA_STATEMENTS) {
     sql.exec(stmt).toArray();
   }

@@ -185,4 +185,15 @@ export class Ledger {
   async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
     return this.repo.allEntries(order);
   }
+
+  /**
+   * Journal completeness check: sequence numbers are assigned monotonically
+   * from 1 with no gaps, so a journal of N entries has MAX(seq) === N.
+   * Returns false if entries are missing from the record — the auditor's
+   * completeness assertion as a one-call verification.
+   */
+  async verifyJournalComplete(): Promise<boolean> {
+    const { count, maxSeq } = await this.repo.entrySequenceStats();
+    return maxSeq === count;
+  }
 }

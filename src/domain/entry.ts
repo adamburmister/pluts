@@ -69,6 +69,13 @@ export class Entry {
     readonly debitAmounts: readonly AmountRecord[],
     readonly creditAmounts: readonly AmountRecord[],
     readonly postedAt: string,
+    /**
+     * Monotonic journal number, assigned at posting time (1, 2, 3, …).
+     * Gives entries a citable identity ("JE 142"), makes same-date ordering
+     * deterministic, and lets MAX(seq) === COUNT(*) prove completeness.
+     * Null only for domain objects constructed outside a repository.
+     */
+    readonly seq: number | null = null,
   ) {}
 
   toJSON(): Record<string, unknown> {
@@ -76,6 +83,7 @@ export class Entry {
       id: this.id,
       description: this.description,
       date: this.date,
+      seq: this.seq,
       debitAmounts: this.debitAmounts.map((d) => ({
         ...d,
         amount: d.amount.toMajor(),
