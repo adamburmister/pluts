@@ -209,8 +209,42 @@ describe("append-only and validity triggers on real DO SQLite", () => {
     });
   });
 
-  it("rejects malformed and impossible dates, and invalid amount rows", async () => {
-    await seeded("attack-validity", (sql) => {
+  it("row-validity triggers fire on legacy tables that lack CHECK constraints", async () => {
+    // On a freshly migrated schema the table CHECKs would reject these rows
+    // anyway, masking the retrofit pluts_*_validate_insert triggers — whose
+    // whole purpose is legacy tables provisioned WITHOUT the CHECKs. Build
+    // that legacy shape, migrate (adds triggers, cannot retrofit CHECKs),
+    // and require the triggers' own "pluts:" RAISE messages.
+    await withStorage("attack-validity-legacy", (_storage, sql) => {
+      sql
+        .exec(
+          `CREATE TABLE pluts_entries (
+            id TEXT PRIMARY KEY NOT NULL,
+            description TEXT NOT NULL,
+            date TEXT NOT NULL,
+            posted_at TEXT NOT NULL
+          )`,
+        )
+        .toArray();
+      sql
+        .exec(
+          `CREATE TABLE pluts_amounts (
+            id TEXT PRIMARY KEY NOT NULL,
+            type TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            amount INTEGER NOT NULL
+          )`,
+        )
+        .toArray();
+      migrate(sql);
+      // A real entry so amount attacks cannot fail on references instead.
+      sql
+        .exec(
+          "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES ('ent-1', 'ok', '2026-01-05', 't')",
+        )
+        .toArray();
+
       for (const bad of [
         "not-a-date",
         "2026-1-5",
@@ -225,22 +259,37 @@ describe("append-only and validity triggers on real DO SQLite", () => {
               bad,
             )
             .toArray(),
-        ).toThrow();
+        ).toThrow(/pluts: entry date/);
       }
       expect(() =>
         sql
           .exec(
-            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-bad', 'sideways', 'a', 'e', 1)",
+            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-bad', 'sideways', 'acc-x', 'ent-1', 1)",
           )
           .toArray(),
-      ).toThrow();
+      ).toThrow(/pluts: amount rows/);
       expect(() =>
         sql
           .exec(
-            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-float', 'debit', 'a', 'e', 1.5)",
+            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-float', 'debit', 'acc-x', 'ent-1', 1.5)",
           )
           .toArray(),
-      ).toThrow();
+      ).toThrow(/pluts: amount rows/);
+      expect(() =>
+        sql
+          .exec(
+            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-huge', 'debit', 'acc-x', 'ent-1', 9007199254740992)",
+          )
+          .toArray(),
+      ).toThrow(/pluts: amount rows/);
+      // Positive control: a valid row passes the same triggers.
+      expect(() =>
+        sql
+          .exec(
+            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-ok', 'debit', 'acc-x', 'ent-1', 100)",
+          )
+          .toArray(),
+      ).not.toThrow();
     });
   });
 
