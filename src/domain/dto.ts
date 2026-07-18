@@ -1,5 +1,6 @@
 import type { Account } from "./account.js";
 import type { AmountRecord, Entry } from "./entry.js";
+import type { AccountType } from "./types.js";
 
 /**
  * Plain, boundary-safe projections of the pluts domain objects.
@@ -16,7 +17,7 @@ import type { AmountRecord, Entry } from "./entry.js";
 export interface AccountDTO {
   id: string;
   name: string;
-  type: string;
+  type: AccountType;
   contra: boolean;
   createdAt: string;
   /** Optional pre-computed balance, formatted in major units. */
