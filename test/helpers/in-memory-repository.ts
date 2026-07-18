@@ -56,7 +56,7 @@ export class InMemoryRepository implements Repository {
     type: AccountType;
     contra: boolean;
   }): Promise<Account> {
-    const key = `${input.name}\0${input.type}`;
+    const key = input.name;
     if (this.nameIndex.has(key)) {
       throw new ValidationError(
         [{ path: ["name"], message: "has already been taken" }],
