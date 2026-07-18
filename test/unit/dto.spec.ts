@@ -118,4 +118,37 @@ describe("DTO serialization", () => {
     const dto = toAccountDTO(acct("Cash"));
     expect(dto.balance).toBeUndefined();
   });
+
+  // F-16: one concept, one wire shape. AmountRecord.toJSON used to emit
+  // { accountId } while Entry.toJSON spread the same records into
+  // { account: {...} } — two different serializations of the same line.
+  // Both now delegate to the DTO mappers.
+  it("JSON of an AmountRecord matches its DTO shape", () => {
+    const line = new AmountRecord(
+      "aline-1",
+      "debit",
+      acct("Cash"),
+      Amount.fromMajor("100.00"),
+      "entry-1",
+    );
+    expect(JSON.parse(JSON.stringify(line))).toEqual(
+      JSON.parse(JSON.stringify(toAmountLineDTO(line))),
+    );
+  });
+
+  it("JSON of an Entry matches its DTO shape", () => {
+    const e = entry();
+    expect(JSON.parse(JSON.stringify(e))).toEqual(
+      JSON.parse(JSON.stringify(toEntryDTO(e))),
+    );
+  });
+
+  // F-16: readonly arrays were compile-time only — a runtime push succeeded.
+  it("entry line arrays are frozen at runtime", () => {
+    const e = entry();
+    expect(() =>
+      (e.debitAmounts as unknown as unknown[]).push("tampered"),
+    ).toThrow(TypeError);
+    expect(e.debitAmounts).toHaveLength(1);
+  });
 });
