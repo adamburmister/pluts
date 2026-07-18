@@ -126,6 +126,7 @@ export function migrate(sql: SqlStorage): void {
         "UPDATE pluts_entries SET seq = ? WHERE id = ?",
         nextSeq,
         String(row.id),
+      )
   }
 
   // Databases provisioned before payload fingerprints existed lack the
