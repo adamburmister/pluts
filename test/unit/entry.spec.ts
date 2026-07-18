@@ -224,6 +224,22 @@ describe("buildEntry", () => {
     );
   });
 
+  // F-12: 1e-7 stringifies as "1e-7"; the amount transform used to throw a
+  // raw RangeError from inside Zod — a crash instead of a validation failure,
+  // violating the "safeParse must never throw" doctrine.
+  it("fails cleanly (not crashes) for scientific-notation number amounts", () => {
+    const msgs = issuesFor({
+      description: "x",
+      debits: [{ account: acct("Cash"), amount: 1e-7 }],
+      credits: [{ account: acct("Rev", AccountType.Revenue), amount: 1e-7 }],
+    });
+    // 1e-7 rounds to $0.00 at scale 2; the entry is rejected as zero-total —
+    // via ValidationError issues, never a raw throw.
+    expect(msgs.some((m) => m.message.includes("greater than zero"))).toBe(
+      true,
+    );
+  });
+
   it("accepts raw number amounts (Zod transform)", () => {
     const payload = buildEntry({
       description: "x",
@@ -243,19 +259,19 @@ describe("buildEntry", () => {
 
 describe("amount transform error shaping", () => {
   // Numbers like 1e21 pass z.number().finite().nonnegative() but stringify
-  // in exponential notation, which Amount.fromMajor's digit regex rejects —
-  // that RangeError must surface as a path-tagged ValidationError, not a raw
-  // throw out of the schema transform.
-  it("reports exponential-notation numbers as ValidationError", () => {
-    for (const bad of [1e21, 1e-7]) {
-      const issues = issuesFor(
-        baseInput({
-          debits: [{ account: acct("Cash"), amount: bad }],
-          credits: [{ account: acct("Rev", AccountType.Revenue), amount: bad }],
-        }),
-      );
-      expect(issues.length).toBeGreaterThan(0);
-    }
+  // in exponential notation. Amount.fromMajor now parses that notation, and
+  // the schema transform wraps any residual parse failure as a Zod issue —
+  // either way, buildEntry must never leak a raw RangeError.
+  it("handles exponential-notation numbers without raw throws", () => {
+    const payload = buildEntry(
+      baseInput({
+        debits: [{ account: acct("Cash"), amount: 1e21 }],
+        credits: [{ account: acct("Rev", AccountType.Revenue), amount: 1e21 }],
+      }),
+    );
+    expect(payload.debits[0]?.amount.toMajor()).toBe(
+      `${"1".padEnd(22, "0")}.00`,
+    );
   });
 });
 
