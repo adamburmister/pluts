@@ -244,19 +244,19 @@ describe("append-only and validity triggers on real DO SQLite", () => {
     });
   });
 
-  it("cannot even bind an amount beyond the JS safe-integer range", async () => {
+  it("cannot bind a bigint at all (the bind layer, isolated)", async () => {
     await seeded("attack-bigint-bind", (sql) => {
       // SqlStorage binds numbers, not bigints — the 2^53 ceiling enforced by
       // the CHECK/trigger is unreachable through this API at all. Pin that
-      // boundary assumption.
+      // boundary with a constraint-free statement, so the ONLY thing that
+      // can reject here is the bind layer itself (an INSERT would also fail
+      // on the safe-integer CHECK or missing FK rows, masking a change in
+      // bind behavior).
       expect(() =>
-        sql
-          .exec(
-            "INSERT INTO pluts_amounts (id, type, account_id, entry_id, amount) VALUES ('amt-big', 'debit', 'a', 'e', ?)",
-            9007199254740992n as unknown as number,
-          )
-          .toArray(),
+        sql.exec("SELECT ? AS v", 42n as unknown as number).toArray(),
       ).toThrow();
+      // Same bind layer accepts a plain number through the same statement.
+      expect(sql.exec("SELECT ? AS v", 42).one()).toEqual({ v: 42 });
     });
   });
 });
