@@ -241,6 +241,24 @@ describe("buildEntry", () => {
   });
 });
 
+describe("amount transform error shaping", () => {
+  // Numbers like 1e21 pass z.number().finite().nonnegative() but stringify
+  // in exponential notation, which Amount.fromMajor's digit regex rejects —
+  // that RangeError must surface as a path-tagged ValidationError, not a raw
+  // throw out of the schema transform.
+  it("reports exponential-notation numbers as ValidationError", () => {
+    for (const bad of [1e21, 1e-7]) {
+      const issues = issuesFor(
+        baseInput({
+          debits: [{ account: acct("Cash"), amount: bad }],
+          credits: [{ account: acct("Rev", AccountType.Revenue), amount: bad }],
+        }),
+      );
+      expect(issues.length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe("computeEntryFingerprint", () => {
   // A retry of a date-less request is still the same request even if it
   // arrives after a UTC day rollover: the fingerprint must hash what the
