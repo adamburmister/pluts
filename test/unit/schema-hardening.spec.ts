@@ -200,6 +200,20 @@ describe("schema hardening", () => {
       ).toThrow();
     });
 
+    // The yyyy-mm-dd GLOB alone admits impossible dates like 2026-02-30;
+    // lexicographic range filters would then silently mis-bucket those rows.
+    it("rejects an entry with an impossible calendar date", () => {
+      for (const bad of ["2026-13-01", "2026-02-30", "2026-00-10"]) {
+        expect(() =>
+          db
+            .prepare(
+              "INSERT INTO pluts_entries (id, description, date, posted_at) VALUES (?, 'bad', ?, '2026-01-05T10:00:00Z')",
+            )
+            .run(`ent-${bad}`, bad),
+        ).toThrow();
+      }
+    });
+
     it("still accepts valid rows", () => {
       expect(() =>
         db

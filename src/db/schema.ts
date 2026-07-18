@@ -30,7 +30,7 @@ export const SCHEMA_STATEMENTS: string[] = [
   description TEXT NOT NULL,
   date TEXT NOT NULL,
   posted_at TEXT NOT NULL,
-  CONSTRAINT pluts_entries_date_check CHECK (date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
+  CONSTRAINT pluts_entries_date_check CHECK (date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(date) IS NOT NULL AND date(date) = date)
 )`,
   `CREATE INDEX IF NOT EXISTS pluts_entries_date_idx ON pluts_entries (date)`,
   `CREATE TABLE IF NOT EXISTS pluts_amounts (
@@ -122,10 +122,15 @@ export const SCHEMA_STATEMENTS: string[] = [
     OR typeof(NEW.amount) != 'integer'
     OR NEW.amount < 0
   BEGIN SELECT RAISE(ABORT, 'pluts: amount rows require type debit|credit and a non-negative integer amount'); END`,
+  // The GLOB checks shape only; date() round-tripping checks the calendar:
+  // SQLite normalizes 2026-02-30 to 2026-03-02 (breaking equality) and
+  // returns NULL for out-of-range fields like month 13.
   `CREATE TRIGGER IF NOT EXISTS pluts_entries_validate_insert
   BEFORE INSERT ON pluts_entries
   WHEN NEW.date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-  BEGIN SELECT RAISE(ABORT, 'pluts: entry date must be a yyyy-mm-dd string'); END`,
+    OR date(NEW.date) IS NULL
+    OR date(NEW.date) != NEW.date
+  BEGIN SELECT RAISE(ABORT, 'pluts: entry date must be a valid yyyy-mm-dd calendar date'); END`,
 ];
 
 /**
