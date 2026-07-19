@@ -128,7 +128,7 @@ Run `migrate(ctx.storage.sql)` to apply the schema; it is idempotent and a no-op
 ## Installation
 
 ```sh
-bun add pluts
+npm install pluts
 ```
 
 Peer dependency: `zod`. Types for the Workers runtime (`SqlStorage`, `DurableObjectStorage`, `crypto`) come from `@cloudflare/workers-types`.
@@ -270,8 +270,8 @@ Two test layers:
 ## Development
 
 ```sh
-bun install
-bun run test     # vitest (domain unit tests, in-memory)
+npm ci
+npm test         # vitest
 ```
 
 Pluts is a library; the runnable Durable Object app that consumes it lives in [pluts-ledger-do](https://github.com/adamburmister/pluts-ledger-do) project. Run `npm run dev` there for a local DO with SQLite storage.
