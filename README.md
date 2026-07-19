@@ -196,7 +196,7 @@ await ledger.trialBalanceReport("2024-12-31"); // classic listing: per-account d
 
 // Reports. Balance sheet and trial balance are point-in-time (asOf);
 // the income statement is a period (flow) statement and takes a range.
-await ledger.balanceSheet("2024-12-31"); // { assets, liabilities, equity, balanced }
+await ledger.balanceSheet("2024-12-31"); // { assets, liabilities, equity, netIncome, balanced }
 await ledger.incomeStatement({ fromDate: "2024-01-01" }); // { revenue, expenses, netIncome }
 ```
 
