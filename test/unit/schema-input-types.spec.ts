@@ -15,27 +15,38 @@ import type {
 // the schemas that actually parse the input. The assertions below fail
 // `npm run typecheck` the moment a schema and its interface disagree.
 //
-// The check is bidirectional assignability rather than `toEqualTypeOf` because
-// zod's `.default()` inputs are structurally equal but not *identically*
-// branded; mutual assignability is the property that actually matters — it
-// catches any added, removed, or retyped field in either direction.
+// `toEqualTypeOf` is avoided on purpose: zod's `ZodDefault` brands its input
+// type (e.g. `contra` on `createAccountSchema`) in a way that trips the
+// matcher's structural-identity check even when the resolved shape is
+// identical. Each interface is instead pinned by two exact checks, which
+// between them leave no gap:
+//   1. `keyof` equality — catches an added or removed field, *including an
+//      optional one* (bidirectional assignability alone would miss that: a type
+//      without an optional field still extends one that has it, and vice versa).
+//   2. bidirectional assignability — catches any field whose type or `?`
+//      optionality changed while the key set stayed the same.
+type AmountInputSchema = z.input<typeof amountLineSchema>;
+type CreateAccountInputSchema = z.input<typeof createAccountSchema>;
+type EntryInputSchema = z.input<typeof entryInputSchema>;
+
 describe("public input interfaces stay in sync with their zod schemas", () => {
   it("AmountInput matches amountLineSchema's input", () => {
-    expectTypeOf<AmountInput>().toExtend<z.input<typeof amountLineSchema>>();
-    expectTypeOf<z.input<typeof amountLineSchema>>().toExtend<AmountInput>();
+    expectTypeOf<keyof AmountInput>().toEqualTypeOf<keyof AmountInputSchema>();
+    expectTypeOf<AmountInput>().toExtend<AmountInputSchema>();
+    expectTypeOf<AmountInputSchema>().toExtend<AmountInput>();
   });
 
   it("CreateAccountInput matches createAccountSchema's input", () => {
-    expectTypeOf<CreateAccountInput>().toExtend<
-      z.input<typeof createAccountSchema>
+    expectTypeOf<keyof CreateAccountInput>().toEqualTypeOf<
+      keyof CreateAccountInputSchema
     >();
-    expectTypeOf<
-      z.input<typeof createAccountSchema>
-    >().toExtend<CreateAccountInput>();
+    expectTypeOf<CreateAccountInput>().toExtend<CreateAccountInputSchema>();
+    expectTypeOf<CreateAccountInputSchema>().toExtend<CreateAccountInput>();
   });
 
   it("EntryInput matches entryInputSchema's input", () => {
-    expectTypeOf<EntryInput>().toExtend<z.input<typeof entryInputSchema>>();
-    expectTypeOf<z.input<typeof entryInputSchema>>().toExtend<EntryInput>();
+    expectTypeOf<keyof EntryInput>().toEqualTypeOf<keyof EntryInputSchema>();
+    expectTypeOf<EntryInput>().toExtend<EntryInputSchema>();
+    expectTypeOf<EntryInputSchema>().toExtend<EntryInput>();
   });
 });
