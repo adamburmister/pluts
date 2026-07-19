@@ -4,7 +4,7 @@
 // `prepack` build), installs it into a throwaway consumer project, then asserts
 // both `import('pluts')` and `tsc --noEmit` succeed.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,7 +32,7 @@ try {
 
   // 2. Scaffold a minimal ESM consumer with an EMPTY `types` array.
   const consumer = join(workDir, "consumer");
-  run("node", ["-e", `require("fs").mkdirSync(${JSON.stringify(consumer)})`], workDir);
+  mkdirSync(consumer);
   writeFileSync(
     join(consumer, "package.json"),
     JSON.stringify(
