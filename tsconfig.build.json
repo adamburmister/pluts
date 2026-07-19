@@ -1,0 +1,20 @@
+{
+  // Emit config for the published package. The base tsconfig is
+  // typecheck-only (`noEmit`, includes `test`, pulls in vitest ambient
+  // types); this narrows to `src` and produces the shippable `dist/`:
+  // ESM `.js`, `.d.ts`, and declaration maps.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    // src consumes only the Workers ambient types; vitest globals are a
+    // test-only concern and must not leak into the emitted declarations.
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "test", "ruby"]
+}

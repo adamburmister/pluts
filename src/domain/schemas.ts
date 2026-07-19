@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { Account } from "./account";
-import { Amount } from "./amount";
-import type { ValidationIssue } from "./errors";
-import { AccountType, isValidISODate, toDateISO } from "./types";
+import { Account } from "./account.js";
+import { Amount } from "./amount.js";
+import type { ValidationIssue } from "./errors.js";
+import { AccountType, isValidISODate, toDateISO } from "./types.js";
 
 /**
  * Amount input: accepts an already-built {@link Amount}, a non-negative finite

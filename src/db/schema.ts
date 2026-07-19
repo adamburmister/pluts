@@ -1,6 +1,6 @@
 import type { SqlStorage } from "@cloudflare/workers-types";
-import { SCALE } from "../domain/amount";
-import { RepositoryError } from "../domain/errors";
+import { SCALE } from "../domain/amount.js";
+import { RepositoryError } from "../domain/errors.js";
 
 /**
  * Pluts schema — the single source of truth for DDL, applied to a

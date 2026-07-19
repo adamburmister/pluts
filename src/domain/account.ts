@@ -1,5 +1,5 @@
-import type { Amount } from "./amount";
-import { type AccountType, normalCreditBalance } from "./types";
+import type { Amount } from "./amount.js";
+import { type AccountType, normalCreditBalance } from "./types.js";
 
 /** A persisted account record. The `type` discriminates the accounting behaviour. */
 export class Account {
