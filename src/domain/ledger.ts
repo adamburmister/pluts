@@ -26,7 +26,20 @@ import { AccountType, type DateRange } from "./types.js";
 export interface BalanceSheet {
   assets: bigint;
   liabilities: bigint;
+  /**
+   * Equity from equity-type accounts only. This *excludes* net income
+   * (pre-closing retained earnings), which is reported separately as
+   * {@link BalanceSheet.netIncome}. The full accounting equation is
+   * `assets === liabilities + equity + netIncome`.
+   */
   equity: bigint;
+  /**
+   * Lifetime net income (revenue - expenses) = pre-closing retained earnings.
+   * On a closed-books balance sheet this would be folded into equity; here it
+   * is surfaced explicitly so consumers can reconcile the accounting equation
+   * from the returned fields alone.
+   */
+  netIncome: bigint;
   /** Assets - (Liabilities + Equity + Net Income). Should be zero in a balanced ledger. */
   balanced: bigint;
 }
@@ -283,6 +296,7 @@ export class Ledger {
       assets,
       liabilities,
       equity,
+      netIncome,
       balanced: assets - (liabilities + equity + netIncome),
     };
   }

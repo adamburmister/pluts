@@ -551,6 +551,35 @@ describe("Ledger (in-memory)", () => {
       expect(bs.balanced).toBe(0n);
     });
 
+    it("reconciles the accounting equation from returned fields when net income exists", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await ledger.createAccount({ name: "Equity", type: AccountType.Equity });
+      await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+      await ledger.createAccount({ name: "Exp", type: AccountType.Expense });
+      // Earn revenue 300 (Cash dr / Revenue cr) and incur expense 100
+      // (Exp dr / Cash cr): net income of 200 lives outside `equity`.
+      await ledger.postEntry({
+        description: "Earn",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(300) }],
+        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(300) }],
+      });
+      await ledger.postEntry({
+        description: "Spend",
+        debits: [{ accountName: "Exp", amount: Amount.fromMajor(100) }],
+        credits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
+      });
+
+      const bs = await ledger.balanceSheet();
+      expect(formatAmount(bs.netIncome)).toBe("200.00");
+      // The equation reconciles using only the returned fields — no consumer
+      // needs to fetch the income statement separately to make it add up.
+      expect(bs.assets).toBe(bs.liabilities + bs.equity + bs.netIncome);
+      expect(bs.balanced).toBe(0n);
+    });
+
     it("produces an income statement", async () => {
       await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
       await ledger.createAccount({
