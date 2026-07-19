@@ -75,10 +75,22 @@ export const createAccountSchema = z.object({
   contra: z.boolean().default(false),
 });
 
-export type CreateAccountInput = z.input<typeof createAccountSchema>;
+/**
+ * Public input for {@link Ledger.createAccount}.
+ *
+ * Hand-written on purpose: zod is an implementation detail, so consumers depend
+ * on this interface rather than on `z.input<typeof createAccountSchema>` (issue
+ * #32). `test/unit/schema-input-types.spec.ts` fails typecheck if the two drift.
+ */
+export interface CreateAccountInput {
+  name: string;
+  type: AccountType;
+  /** Contra account (normal balance flipped). Defaults to `false`. */
+  contra?: boolean | undefined;
+}
 
 /** A single debit/credit line. Either `account` or `accountName` is required. */
-const amountLineSchema = z
+export const amountLineSchema = z
   .object({
     account: z.instanceof(Account).optional(),
     accountName: z.string().min(1).optional(),
@@ -90,7 +102,20 @@ const amountLineSchema = z
   });
 
 export type AmountLine = z.output<typeof amountLineSchema>;
-export type AmountInput = z.input<typeof amountLineSchema>;
+
+/**
+ * Public input for a single debit/credit line. Hand-written to keep zod off the
+ * public API surface (issue #32); kept in sync with {@link amountLineSchema} by
+ * the type assertions in `test/unit/schema-input-types.spec.ts`.
+ */
+export interface AmountInput {
+  /** A pre-resolved account. Either `account` or `accountName` is required. */
+  account?: Account | undefined;
+  /** An account name to resolve. Either `account` or `accountName` is required. */
+  accountName?: string | undefined;
+  /** An {@link Amount}, a non-negative finite number, or a digit-only string. */
+  amount: Amount | number | string;
+}
 
 /** Input shape for building an entry (mirrors Ruby's `Entry.new` hash). */
 export const entryInputSchema = z
@@ -141,7 +166,20 @@ export const entryInputSchema = z
     }
   });
 
-export type EntryInput = z.input<typeof entryInputSchema>;
+/**
+ * Public input for {@link Ledger.postEntry}. Hand-written to keep zod off the
+ * public API surface (issue #32); kept in sync with {@link entryInputSchema} by
+ * the type assertions in `test/unit/schema-input-types.spec.ts`.
+ */
+export interface EntryInput {
+  /** Deduplicates a retried post; a repeat returns the original entry. */
+  idempotencyKey?: string | undefined;
+  description: string;
+  /** A `Date` or ISO `yyyy-mm-dd` string; defaults to today when omitted. */
+  date?: Date | string | undefined;
+  debits: AmountInput[];
+  credits: AmountInput[];
+}
 
 /**
  * Maps Zod issues to {@link ValidationIssue}s, preserving paths.

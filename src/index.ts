@@ -50,15 +50,14 @@ export {
   type TrialBalanceReport,
   type TrialBalanceRow,
 } from "./domain/ledger.js";
-export {
-  type AmountInput,
-  amountSchema,
-  type CreateAccountInput,
-  createAccountSchema,
-  dateRangeSchema,
-  type EntryInput,
-  entryInputSchema,
-  toIssues,
+// Only the hand-written input interfaces are public. The zod schemas that
+// validate them (and `toIssues`, which maps `z.ZodIssue`s) are an
+// implementation detail, deliberately kept off the API surface so a zod major
+// bump is not a breaking change for consumers (issue #32).
+export type {
+  AmountInput,
+  CreateAccountInput,
+  EntryInput,
 } from "./domain/schemas.js";
 export {
   ACCOUNT_TYPES,

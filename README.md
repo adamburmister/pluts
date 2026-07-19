@@ -131,7 +131,11 @@ Run `migrate(ctx.storage.sql)` to apply the schema; it is idempotent and a no-op
 npm install pluts
 ```
 
-Peer dependency: `zod`. Types for the Workers runtime (`SqlStorage`, `DurableObjectStorage`, `crypto`) come from `@cloudflare/workers-types`.
+`zod` is a runtime dependency and is installed automatically — it validates input
+at the ledger boundary but is an internal implementation detail, not part of the
+public API (see [Validation](#validation) below). Types for the Workers runtime
+(`SqlStorage`, `DurableObjectStorage`, `crypto`) come from
+`@cloudflare/workers-types`.
 
 ## Usage
 
@@ -251,6 +255,14 @@ Rules (enforced via Zod schema + `superRefine`):
 - sum(debits) === sum(credits) (exact)
 - `date` defaults to today if omitted
 - account names must resolve to existing accounts
+
+Zod validates these inputs internally, but **the zod schemas are not part of the
+public API**. The package exports hand-written input interfaces —
+`EntryInput`, `CreateAccountInput`, `AmountInput` — and not the underlying
+schema objects or their `z.input` types. This keeps zod an implementation
+detail: upgrading zod (including a major bump) is not a breaking change for
+consumers. The interfaces are kept in lockstep with the schemas by compile-time
+assertions in `test/unit/schema-input-types.spec.ts`.
 
 ## Testing
 
