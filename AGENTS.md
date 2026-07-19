@@ -64,12 +64,23 @@ npx vitest             # watch mode
 No external migration tool. Schema = idempotent `CREATE TABLE/INDEX/TRIGGER
 IF NOT EXISTS` in `src/db/schema.ts`; `migrate(ctx.storage.sql)` runs on
 every cold start and stamps `pluts_ledger_meta` (scale, `schema_version`,
-optional currency). **Step order inside `migrate()` is load-bearing**: meta
-table + version rollback guard → legacy negative-rowid repair → seq ALTER →
-DDL loop → seq backfill → scale/version/currency stamps → payload_hash
-backfill. Future incompatible changes bump `SCHEMA_VERSION` and add explicit
-upgrade steps — never "reset the database". (Local dev scratch DBs can still
-be reset with `rm -rf .wrangler/state/v3/do` in the consuming app.)
+optional currency). `migrate()` carries **no data-migration steps** — the
+project is greenfield, so every schema change so far has been expressible as
+idempotent DDL alone.
+
+**Step order inside `migrate()` is load-bearing**: meta table DDL → version
+rollback guard → DDL loop → scale check → scale/`schema_version`/currency
+stamps. The rollback guard must precede all other DDL (a build older than the
+stored version must refuse *before* running statements a newer release may
+have reshaped), and the version stamp comes last so a failure part-way leaves
+the old version recorded and the migration retries.
+
+Future incompatible changes bump `SCHEMA_VERSION` and add explicit upgrade
+steps — never "reset the database". A data step that repairs existing rows
+goes **before the DDL loop** when the new triggers would reject the repair
+itself (e.g. relocating rows a new trigger would freeze), and after it when
+the step needs the new schema shape. (Local dev scratch DBs can still be
+reset with `rm -rf .wrangler/state/v3/do` in the consuming app.)
 
 ## Invariants that live at specific seams
 - Append-only + row validity are enforced by schema triggers, not just code.
