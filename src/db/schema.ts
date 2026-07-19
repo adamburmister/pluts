@@ -100,6 +100,37 @@ export const SCHEMA_STATEMENTS: string[] = [
   // immutable in full. Note: trigger bodies contain internal semicolons —
   // runners that naively split SCHEMA_SQL on ';' will corrupt them; use
   // migrate(), which executes each statement whole.
+  // The chart of accounts is not append-only — an account created by mistake
+  // and never posted to can be dropped, and renaming is an ordinary
+  // bookkeeping operation — but its *classification* is load-bearing history.
+  // Flipping type or contra retroactively reclassifies every prior report
+  // while the trial balance still nets to zero, so unlike an injected amount
+  // row this corruption is invisible to every other check in the system.
+  // Hence: identity and classification frozen, name free.
+  // Value-based, not column-scoped: an `UPDATE OF id, type, ...` trigger
+  // fires on column *mention*, so a caller writing the whole row back (an
+  // ORM, or "SET name = ?, type = ?, contra = ?") would be refused a rename
+  // this policy allows. Comparing OLD to NEW rejects exactly the changes that
+  // matter and lets no-op writes through. It also subsumes the rowid guard
+  // the entries table needs as a separate trigger — UPDATE OF never matches
+  // a rowid assignment, but an unscoped WHEN does, closing
+  // "SET rowid = -1", which would otherwise poison the auto-rowid sentinel
+  // the no_replace guard relies on. All four columns are NOT NULL, so `!=`
+  // needs no null-safe form.
+  `CREATE TRIGGER IF NOT EXISTS pluts_accounts_no_update
+  BEFORE UPDATE ON pluts_accounts
+  WHEN NEW.id != OLD.id
+    OR NEW.type != OLD.type
+    OR NEW.contra != OLD.contra
+    OR NEW.created_at != OLD.created_at
+    OR NEW.rowid != OLD.rowid
+  BEGIN SELECT RAISE(ABORT, 'pluts: account identity and classification are immutable'); END`,
+  // The FK's ON DELETE NO ACTION already blocks this, but only with an opaque
+  // "FOREIGN KEY constraint failed"; the trigger fires first and says why.
+  `CREATE TRIGGER IF NOT EXISTS pluts_accounts_no_delete_referenced
+  BEFORE DELETE ON pluts_accounts
+  WHEN EXISTS (SELECT 1 FROM pluts_amounts WHERE account_id = OLD.id)
+  BEGIN SELECT RAISE(ABORT, 'pluts: accounts referenced by ledger amounts cannot be deleted'); END`,
   `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_update
   BEFORE UPDATE OF id, description, date, posted_at ON pluts_entries
   BEGIN SELECT RAISE(ABORT, 'pluts: ledger entries are append-only'); END`,
@@ -137,6 +168,23 @@ export const SCHEMA_STATEMENTS: string[] = [
   // TEXT primary key; both are guarded. For auto-assigned rowids NEW.rowid
   // is -1 in a BEFORE INSERT trigger, which matches no real row, so normal
   // inserts pass.
+  `CREATE TRIGGER IF NOT EXISTS pluts_accounts_no_replace
+  BEFORE INSERT ON pluts_accounts
+  WHEN EXISTS (SELECT 1 FROM pluts_accounts WHERE id = NEW.id)
+    OR EXISTS (SELECT 1 FROM pluts_accounts WHERE rowid = NEW.rowid)
+  BEGIN SELECT RAISE(ABORT, 'pluts: account identity and classification are immutable'); END`,
+  // Accounts carry a conflict channel the other tables lack: the UNIQUE name
+  // index. A REPLACE naming an existing account under a fresh id conflicts
+  // there rather than on id or rowid, and the conflict delete bypasses the
+  // DELETE trigger — reclassifying "Cash" without ever touching its id.
+  // Separate trigger, not another OR on the guard above, because the message
+  // must still read as a unique-constraint failure: the repository maps that
+  // phrase to createAccount's "has already been taken" validation error, and
+  // an ordinary duplicate-name INSERT lands here too.
+  `CREATE TRIGGER IF NOT EXISTS pluts_accounts_no_name_replace
+  BEFORE INSERT ON pluts_accounts
+  WHEN EXISTS (SELECT 1 FROM pluts_accounts WHERE name = NEW.name)
+  BEGIN SELECT RAISE(ABORT, 'pluts: UNIQUE constraint failed: pluts_accounts.name is already in use'); END`,
   `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_replace
   BEFORE INSERT ON pluts_entries
   WHEN EXISTS (SELECT 1 FROM pluts_entries WHERE id = NEW.id)
@@ -162,6 +210,20 @@ export const SCHEMA_STATEMENTS: string[] = [
   // AFTER INSERT sees the actually-assigned rowid — always positive for
   // auto-assignment — so rejecting negatives here makes the poisoned state
   // unstorable without touching normal inserts.
+  //
+  // These guards are prophylactic only: no `migrate` step relocates rows
+  // already parked at a negative rowid. A pre-v2 database could hold one in
+  // pluts_accounts (v1 left that table undefended), which would poison the
+  // sentinel and abort every later account insert — but Pluts is greenfield
+  // with no released consumers, so no such database exists. Under v2 the
+  // state is unreachable: explicit negative inserts abort here, rowid
+  // reassignment aborts in the no_update guards, and auto-assignment never
+  // yields a negative. Should a repair ever be needed, it must run BEFORE
+  // the DDL loop installs these triggers.
+  `CREATE TRIGGER IF NOT EXISTS pluts_accounts_no_negative_rowid
+  AFTER INSERT ON pluts_accounts
+  WHEN NEW.rowid < 0
+  BEGIN SELECT RAISE(ABORT, 'pluts: negative rowid values are reserved'); END`,
   `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_negative_rowid
   AFTER INSERT ON pluts_entries
   WHEN NEW.rowid < 0
@@ -211,7 +273,7 @@ export const SCHEMA_STATEMENTS: string[] = [
  * Future incompatible changes bump this constant and add explicit upgrade
  * steps to `migrate` — never "reset the database".
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** Metadata describing a provisioned ledger database. */
 export interface LedgerMeta {
