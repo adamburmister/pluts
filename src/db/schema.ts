@@ -210,6 +210,16 @@ export const SCHEMA_STATEMENTS: string[] = [
   // AFTER INSERT sees the actually-assigned rowid — always positive for
   // auto-assignment — so rejecting negatives here makes the poisoned state
   // unstorable without touching normal inserts.
+  //
+  // These guards are prophylactic only: no `migrate` step relocates rows
+  // already parked at a negative rowid. A pre-v2 database could hold one in
+  // pluts_accounts (v1 left that table undefended), which would poison the
+  // sentinel and abort every later account insert — but Pluts is greenfield
+  // with no released consumers, so no such database exists. Under v2 the
+  // state is unreachable: explicit negative inserts abort here, rowid
+  // reassignment aborts in the no_update guards, and auto-assignment never
+  // yields a negative. Should a repair ever be needed, it must run BEFORE
+  // the DDL loop installs these triggers.
   `CREATE TRIGGER IF NOT EXISTS pluts_accounts_no_negative_rowid
   AFTER INSERT ON pluts_accounts
   WHEN NEW.rowid < 0
@@ -334,52 +344,6 @@ export function migrate(
       `Ledger schema is version ${meta.schemaVersion} but this build supports up to ${SCHEMA_VERSION}; ` +
         "deploy a build at or above the stored version instead of rolling back",
     );
-  }
-
-  // Legacy negative-rowid repair, BEFORE the DDL loop installs the v2
-  // guards. Schema v1 left pluts_accounts undefended, so a v1 ledger can
-  // already hold an account parked at a negative rowid. The v2 replace guard
-  // reads NEW.rowid = -1 as "auto-assigned" (SQLite's BEFORE INSERT
-  // sentinel), so such a row would make the sentinel match a real row and
-  // abort every subsequent account insert. Relocating first also keeps the
-  // repair itself legal: on a v1 database the immutability triggers do not
-  // exist yet, so the rowid writes below pass.
-  //
-  // One row per iteration — a single UPDATE would assign every negative row
-  // the same target rowid and collide. The loop is bounded by the count of
-  // negative rows, each iteration removing exactly one.
-  const accountsTableExists =
-    (
-      sql
-        .exec(
-          "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'pluts_accounts'",
-        )
-        .toArray() as Array<{ n?: unknown }>
-    )[0]?.n === 1;
-  if (accountsTableExists) {
-    const countNegativeAccountRowids = (): number =>
-      Number(
-        (
-          sql
-            .exec("SELECT COUNT(*) AS n FROM pluts_accounts WHERE rowid < 0")
-            .toArray() as Array<{ n?: unknown }>
-        )[0]?.n ?? 0,
-      );
-    for (
-      let remaining = countNegativeAccountRowids();
-      remaining > 0;
-      remaining--
-    ) {
-      sql
-        .exec(
-          // max(0, MAX(rowid)) — the scalar floor matters when EVERY row is
-          // negative: MAX(rowid) + 1 would still be negative and the row
-          // would never leave the negative range.
-          "UPDATE pluts_accounts SET rowid = (SELECT max(0, MAX(rowid)) + 1 FROM pluts_accounts) " +
-            "WHERE rowid = (SELECT MIN(rowid) FROM pluts_accounts)",
-        )
-        .toArray();
-    }
   }
 
   for (const stmt of SCHEMA_STATEMENTS) {
