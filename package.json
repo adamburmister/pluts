@@ -38,7 +38,7 @@
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
     "build": "npm run clean && tsc -p tsconfig.build.json",
-    "publint": "publint",
+    "publint": "publint --pack npm",
     "verify:pack": "node scripts/verify-pack.mjs",
     "prepack": "npm run build"
   },
