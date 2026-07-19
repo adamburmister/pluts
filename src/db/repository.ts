@@ -1,7 +1,7 @@
-import type { Account } from "../domain/account";
-import type { Amount } from "../domain/amount";
-import type { AmountRecord, Entry, EntryPayload } from "../domain/entry";
-import type { AccountType, DateRange } from "../domain/types";
+import type { Account } from "../domain/account.js";
+import type { Amount } from "../domain/amount.js";
+import type { AmountRecord, Entry, EntryPayload } from "../domain/entry.js";
+import type { AccountType, DateRange } from "../domain/types.js";
 
 export interface Repository {
   insertAccount(input: {

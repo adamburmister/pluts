@@ -17,3 +17,8 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - run: npm run build
+      - run: npm run publint
+      # Regression guard for the packaging shape (issue #18): the tarball must
+      # import in plain Node ESM and typecheck against a consumer with types: [].
+      - run: npm run verify:pack

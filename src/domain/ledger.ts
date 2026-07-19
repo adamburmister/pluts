@@ -1,21 +1,21 @@
-import type { Repository } from "../db/repository";
-import { type Account, aggregateBalances, computeBalance } from "./account";
+import type { Repository } from "../db/repository.js";
+import { type Account, aggregateBalances, computeBalance } from "./account.js";
 import {
   type AmountRecord,
   buildEntry,
   computeEntryFingerprint,
   type Entry,
   type EntryPayload,
-} from "./entry";
-import { IdempotencyConflictError, ValidationError } from "./errors";
+} from "./entry.js";
+import { IdempotencyConflictError, ValidationError } from "./errors.js";
 import {
   type CreateAccountInput,
   createAccountSchema,
   dateRangeSchema,
   type EntryInput,
   toIssues,
-} from "./schemas";
-import { AccountType, type DateRange } from "./types";
+} from "./schemas.js";
+import { AccountType, type DateRange } from "./types.js";
 
 /**
  * Balances are signed `bigint` minor units. A balance may legitimately be

@@ -1,6 +1,9 @@
-import type { DurableObjectStorage } from "@cloudflare/workers-types";
-import { Account } from "../domain/account";
-import { Amount } from "../domain/amount";
+import type {
+  DurableObjectStorage,
+  SqlStorageValue,
+} from "@cloudflare/workers-types";
+import { Account } from "../domain/account.js";
+import { Amount } from "../domain/amount.js";
 import {
   type AmountKind,
   AmountRecord,
@@ -9,14 +12,18 @@ import {
   computeEntryFingerprint,
   Entry,
   type EntryPayload,
-} from "../domain/entry";
+} from "../domain/entry.js";
 import {
   IdempotencyConflictError,
   RepositoryError,
   ValidationError,
-} from "../domain/errors";
-import { type AccountType, type DateRange, toDateISO } from "../domain/types";
-import type { Repository } from "./repository";
+} from "../domain/errors.js";
+import {
+  type AccountType,
+  type DateRange,
+  toDateISO,
+} from "../domain/types.js";
+import type { Repository } from "./repository.js";
 
 /**
  * Bridge a minor-units `bigint` onto SqlStorage's `number` bind type.
