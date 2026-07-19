@@ -278,11 +278,13 @@ describe("schema hardening", () => {
       ).toThrow(/immutable/);
     });
 
+    // A fresh name, so the id channel is what aborts this — reusing 'Cash'
+    // would also trip the name guard and stop proving anything about id.
     it("blocks INSERT OR REPLACE from rewriting an account via id", () => {
       expect(() =>
         db
           .prepare(
-            "INSERT OR REPLACE INTO pluts_accounts (id, name, type, contra, created_at) VALUES ('acc-1', 'Cash', 'Liability', 1, '2026-01-01T00:00:00Z')",
+            "INSERT OR REPLACE INTO pluts_accounts (id, name, type, contra, created_at) VALUES ('acc-1', 'Renamed', 'Liability', 1, '2026-01-01T00:00:00Z')",
           )
           .run(),
       ).toThrow(/immutable/);
@@ -291,6 +293,43 @@ describe("schema hardening", () => {
         .get();
       expect(row?.type).toBe("Asset");
       expect(row?.contra).toBe(0);
+    });
+
+    // Accounts carry a third conflict channel the other tables lack: the
+    // UNIQUE name index. A REPLACE naming an existing account under a fresh
+    // id conflicts there, and the conflict delete bypasses the DELETE trigger
+    // (recursive_triggers is OFF) — reclassifying "Cash" without ever
+    // touching its id or rowid.
+    it("blocks INSERT OR REPLACE from rewriting an account via its name", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO pluts_accounts (id, name, type, contra, created_at) VALUES ('acc-new', 'Cash', 'Liability', 1, '2026-01-01T00:00:00Z')",
+          )
+          .run(),
+      ).toThrow(/UNIQUE constraint failed/);
+      const row = db
+        .prepare(
+          "SELECT id, type, contra FROM pluts_accounts WHERE name = 'Cash'",
+        )
+        .get();
+      expect(row?.id).toBe("acc-1");
+      expect(row?.type).toBe("Asset");
+      expect(row?.contra).toBe(0);
+    });
+
+    // The name guard must keep reading as a unique-constraint failure: the
+    // repository maps that phrase to a "has already been taken" validation
+    // error on createAccount. A bare "immutable" message would leak an
+    // internal schema error to consumers creating a duplicate account.
+    it("reports an ordinary duplicate-name INSERT as a unique-constraint failure", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_accounts (id, name, type, contra, created_at) VALUES ('acc-dup', 'Cash', 'Asset', 0, '2026-01-01T00:00:00Z')",
+          )
+          .run(),
+      ).toThrow(/UNIQUE constraint failed/);
     });
 
     it("blocks INSERT OR REPLACE from rewriting an account via rowid", () => {

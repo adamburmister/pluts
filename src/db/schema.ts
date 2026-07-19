@@ -165,6 +165,18 @@ export const SCHEMA_STATEMENTS: string[] = [
   WHEN EXISTS (SELECT 1 FROM pluts_accounts WHERE id = NEW.id)
     OR EXISTS (SELECT 1 FROM pluts_accounts WHERE rowid = NEW.rowid)
   BEGIN SELECT RAISE(ABORT, 'pluts: account identity and classification are immutable'); END`,
+  // Accounts carry a conflict channel the other tables lack: the UNIQUE name
+  // index. A REPLACE naming an existing account under a fresh id conflicts
+  // there rather than on id or rowid, and the conflict delete bypasses the
+  // DELETE trigger — reclassifying "Cash" without ever touching its id.
+  // Separate trigger, not another OR on the guard above, because the message
+  // must still read as a unique-constraint failure: the repository maps that
+  // phrase to createAccount's "has already been taken" validation error, and
+  // an ordinary duplicate-name INSERT lands here too.
+  `CREATE TRIGGER IF NOT EXISTS pluts_accounts_no_name_replace
+  BEFORE INSERT ON pluts_accounts
+  WHEN EXISTS (SELECT 1 FROM pluts_accounts WHERE name = NEW.name)
+  BEGIN SELECT RAISE(ABORT, 'pluts: UNIQUE constraint failed: pluts_accounts.name is already in use'); END`,
   `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_replace
   BEFORE INSERT ON pluts_entries
   WHEN EXISTS (SELECT 1 FROM pluts_entries WHERE id = NEW.id)
@@ -314,6 +326,52 @@ export function migrate(
       `Ledger schema is version ${meta.schemaVersion} but this build supports up to ${SCHEMA_VERSION}; ` +
         "deploy a build at or above the stored version instead of rolling back",
     );
+  }
+
+  // Legacy negative-rowid repair, BEFORE the DDL loop installs the v2
+  // guards. Schema v1 left pluts_accounts undefended, so a v1 ledger can
+  // already hold an account parked at a negative rowid. The v2 replace guard
+  // reads NEW.rowid = -1 as "auto-assigned" (SQLite's BEFORE INSERT
+  // sentinel), so such a row would make the sentinel match a real row and
+  // abort every subsequent account insert. Relocating first also keeps the
+  // repair itself legal: on a v1 database the immutability triggers do not
+  // exist yet, so the rowid writes below pass.
+  //
+  // One row per iteration — a single UPDATE would assign every negative row
+  // the same target rowid and collide. The loop is bounded by the count of
+  // negative rows, each iteration removing exactly one.
+  const accountsTableExists =
+    (
+      sql
+        .exec(
+          "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'pluts_accounts'",
+        )
+        .toArray() as Array<{ n?: unknown }>
+    )[0]?.n === 1;
+  if (accountsTableExists) {
+    const countNegativeAccountRowids = (): number =>
+      Number(
+        (
+          sql
+            .exec("SELECT COUNT(*) AS n FROM pluts_accounts WHERE rowid < 0")
+            .toArray() as Array<{ n?: unknown }>
+        )[0]?.n ?? 0,
+      );
+    for (
+      let remaining = countNegativeAccountRowids();
+      remaining > 0;
+      remaining--
+    ) {
+      sql
+        .exec(
+          // max(0, MAX(rowid)) — the scalar floor matters when EVERY row is
+          // negative: MAX(rowid) + 1 would still be negative and the row
+          // would never leave the negative range.
+          "UPDATE pluts_accounts SET rowid = (SELECT max(0, MAX(rowid)) + 1 FROM pluts_accounts) " +
+            "WHERE rowid = (SELECT MIN(rowid) FROM pluts_accounts)",
+        )
+        .toArray();
+    }
   }
 
   for (const stmt of SCHEMA_STATEMENTS) {
