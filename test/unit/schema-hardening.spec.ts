@@ -267,6 +267,26 @@ describe("schema hardening", () => {
       expect(row?.type).toBe("Asset");
     });
 
+    // A column-scoped UPDATE OF trigger fires on column *mention*, not on
+    // value change, so a caller writing the whole row back (an ORM, or plain
+    // "SET name = ?, type = ?, contra = ?") would be refused a rename this
+    // policy allows. The guard has to compare OLD to NEW, not just watch
+    // which columns were named.
+    it("allows a rename that rewrites the classification columns unchanged", () => {
+      expect(() =>
+        db
+          .prepare(
+            "UPDATE pluts_accounts SET name = ?, type = ?, contra = ?, created_at = ? WHERE id = ?",
+          )
+          .run("Cash at bank", "Asset", 0, "2026-01-01T00:00:00Z", "acc-1"),
+      ).not.toThrow();
+      const row = db
+        .prepare("SELECT name, type FROM pluts_accounts WHERE id = 'acc-1'")
+        .get();
+      expect(row?.name).toBe("Cash at bank");
+      expect(row?.type).toBe("Asset");
+    });
+
     // UPDATE OF never matches a rowid assignment, so a column-scoped trigger
     // alone leaves "SET rowid = -1" open — which poisons the negative-rowid
     // sentinel the no_replace guard depends on.

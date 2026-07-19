@@ -107,15 +107,23 @@ export const SCHEMA_STATEMENTS: string[] = [
   // while the trial balance still nets to zero, so unlike an injected amount
   // row this corruption is invisible to every other check in the system.
   // Hence: identity and classification frozen, name free.
+  // Value-based, not column-scoped: an `UPDATE OF id, type, ...` trigger
+  // fires on column *mention*, so a caller writing the whole row back (an
+  // ORM, or "SET name = ?, type = ?, contra = ?") would be refused a rename
+  // this policy allows. Comparing OLD to NEW rejects exactly the changes that
+  // matter and lets no-op writes through. It also subsumes the rowid guard
+  // the entries table needs as a separate trigger — UPDATE OF never matches
+  // a rowid assignment, but an unscoped WHEN does, closing
+  // "SET rowid = -1", which would otherwise poison the auto-rowid sentinel
+  // the no_replace guard relies on. All four columns are NOT NULL, so `!=`
+  // needs no null-safe form.
   `CREATE TRIGGER IF NOT EXISTS pluts_accounts_no_update
-  BEFORE UPDATE OF id, type, contra, created_at ON pluts_accounts
-  BEGIN SELECT RAISE(ABORT, 'pluts: account identity and classification are immutable'); END`,
-  // As with entries: UPDATE OF never matches a rowid assignment, so this
-  // companion trigger closes "UPDATE ... SET rowid = -1", which would
-  // otherwise poison the auto-rowid sentinel the no_replace guard relies on.
-  `CREATE TRIGGER IF NOT EXISTS pluts_accounts_no_rowid_update
   BEFORE UPDATE ON pluts_accounts
-  WHEN NEW.rowid != OLD.rowid
+  WHEN NEW.id != OLD.id
+    OR NEW.type != OLD.type
+    OR NEW.contra != OLD.contra
+    OR NEW.created_at != OLD.created_at
+    OR NEW.rowid != OLD.rowid
   BEGIN SELECT RAISE(ABORT, 'pluts: account identity and classification are immutable'); END`,
   // The FK's ON DELETE NO ACTION already blocks this, but only with an opaque
   // "FOREIGN KEY constraint failed"; the trigger fires first and says why.
