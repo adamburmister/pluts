@@ -211,6 +211,137 @@ describe("schema hardening", () => {
     });
   });
 
+  // A type/contra flip retroactively reclassifies every historical report
+  // while the trial balance still nets to zero, so — unlike an injected
+  // amount row — the corruption is invisible to every existing check. The
+  // chart of accounts has to defend itself at the schema level.
+  describe("chart-of-accounts immutability", () => {
+    it("blocks reclassifying an account's type", () => {
+      expect(() =>
+        db
+          .prepare("UPDATE pluts_accounts SET type = 'Liability' WHERE id = ?")
+          .run("acc-1"),
+      ).toThrow(/immutable/);
+      const row = db
+        .prepare("SELECT type FROM pluts_accounts WHERE id = 'acc-1'")
+        .get();
+      expect(row?.type).toBe("Asset");
+    });
+
+    it("blocks flipping an account's contra flag", () => {
+      expect(() =>
+        db.prepare("UPDATE pluts_accounts SET contra = 1").run(),
+      ).toThrow(/immutable/);
+    });
+
+    it("blocks rewriting an account's id or created_at", () => {
+      expect(() =>
+        db
+          .prepare("UPDATE pluts_accounts SET id = 'acc-evil' WHERE id = ?")
+          .run("acc-1"),
+      ).toThrow(/immutable/);
+      expect(() =>
+        db
+          .prepare(
+            "UPDATE pluts_accounts SET created_at = '1999-01-01T00:00:00Z'",
+          )
+          .run(),
+      ).toThrow(/immutable/);
+    });
+
+    // Renaming is a legitimate bookkeeping operation: it neither reclassifies
+    // history nor changes any balance, and the unique name index still bars
+    // the ambiguity a duplicate name would create. Policy is "renames are
+    // allowed" — asserted explicitly so a later blanket trigger can't silently
+    // take it away.
+    it("allows renaming an account", () => {
+      expect(() =>
+        db
+          .prepare("UPDATE pluts_accounts SET name = ? WHERE id = ?")
+          .run("Cash at bank", "acc-1"),
+      ).not.toThrow();
+      const row = db
+        .prepare("SELECT name, type FROM pluts_accounts WHERE id = 'acc-1'")
+        .get();
+      expect(row?.name).toBe("Cash at bank");
+      expect(row?.type).toBe("Asset");
+    });
+
+    // UPDATE OF never matches a rowid assignment, so a column-scoped trigger
+    // alone leaves "SET rowid = -1" open — which poisons the negative-rowid
+    // sentinel the no_replace guard depends on.
+    it("blocks reassigning an account's rowid", () => {
+      expect(() =>
+        db
+          .prepare("UPDATE pluts_accounts SET rowid = -1 WHERE id = ?")
+          .run("acc-1"),
+      ).toThrow(/immutable/);
+    });
+
+    it("blocks INSERT OR REPLACE from rewriting an account via id", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO pluts_accounts (id, name, type, contra, created_at) VALUES ('acc-1', 'Cash', 'Liability', 1, '2026-01-01T00:00:00Z')",
+          )
+          .run(),
+      ).toThrow(/immutable/);
+      const row = db
+        .prepare("SELECT type, contra FROM pluts_accounts WHERE id = 'acc-1'")
+        .get();
+      expect(row?.type).toBe("Asset");
+      expect(row?.contra).toBe(0);
+    });
+
+    it("blocks INSERT OR REPLACE from rewriting an account via rowid", () => {
+      const rowid = db
+        .prepare("SELECT rowid FROM pluts_accounts WHERE id = 'acc-1'")
+        .get()?.rowid as number;
+      expect(() =>
+        db
+          .prepare(
+            "INSERT OR REPLACE INTO pluts_accounts (rowid, id, name, type, contra, created_at) VALUES (?, 'acc-evil', 'Evil', 'Liability', 1, '2026-01-01T00:00:00Z')",
+          )
+          .run(rowid),
+      ).toThrow(/immutable/);
+      const row = db
+        .prepare("SELECT type FROM pluts_accounts WHERE id = 'acc-1'")
+        .get();
+      expect(row?.type).toBe("Asset");
+    });
+
+    it("rejects an account stored at a negative rowid", () => {
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO pluts_accounts (rowid, id, name, type, contra, created_at) VALUES (-1, 'acc-neg', 'Neg', 'Asset', 0, '2026-01-01T00:00:00Z')",
+          )
+          .run(),
+      ).toThrow(/negative rowid/);
+    });
+
+    it("blocks DELETE of an account referenced by posted amounts", () => {
+      expect(() =>
+        db.prepare("DELETE FROM pluts_accounts WHERE id = ?").run("acc-1"),
+      ).toThrow(/referenced/);
+      const row = db
+        .prepare("SELECT COUNT(*) AS n FROM pluts_accounts WHERE id = 'acc-1'")
+        .get();
+      expect(row?.n).toBe(1);
+    });
+
+    // An account created by mistake and never posted to is not part of the
+    // financial record, so removing it is allowed.
+    it("allows DELETE of an unreferenced account", () => {
+      db.prepare(
+        "INSERT INTO pluts_accounts (id, name, type, contra, created_at) VALUES ('acc-3', 'Unused', 'Expense', 0, '2026-01-01T00:00:00Z')",
+      ).run();
+      expect(() =>
+        db.prepare("DELETE FROM pluts_accounts WHERE id = ?").run("acc-3"),
+      ).not.toThrow();
+    });
+  });
+
   describe("row validity enforcement (F-14)", () => {
     it("rejects an amount with an invalid kind", () => {
       expect(() =>

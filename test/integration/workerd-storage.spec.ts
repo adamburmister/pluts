@@ -148,6 +148,53 @@ describe("append-only and validity triggers on real DO SQLite", () => {
     });
   });
 
+  // The reclassification attack the trial balance cannot see: flipping an
+  // Asset to a Liability rewrites every historical report while every
+  // existing check still passes.
+  it("blocks reclassifying, replacing, or deleting an account", async () => {
+    await seeded("attack-accounts", (sql) => {
+      const acc = sql
+        .exec("SELECT id, rowid FROM pluts_accounts WHERE name = 'Cash'")
+        .one() as { id: string; rowid: number };
+
+      expect(() =>
+        sql
+          .exec(
+            "UPDATE pluts_accounts SET type = 'Liability' WHERE id = ?",
+            acc.id,
+          )
+          .toArray(),
+      ).toThrow(/immutable/);
+      expect(() =>
+        sql.exec("UPDATE pluts_accounts SET contra = 1").toArray(),
+      ).toThrow(/immutable/);
+      expect(() =>
+        sql
+          .exec(
+            "INSERT OR REPLACE INTO pluts_accounts (rowid, id, name, type, contra, created_at) VALUES (?, 'acc-evil', 'Evil', 'Liability', 1, '2026-01-01T00:00:00Z')",
+            acc.rowid,
+          )
+          .toArray(),
+      ).toThrow(/immutable/);
+      expect(() =>
+        sql.exec("DELETE FROM pluts_accounts WHERE id = ?", acc.id).toArray(),
+      ).toThrow(/referenced/);
+
+      // Renames stay legal, and the classification survives every attempt.
+      expect(() =>
+        sql
+          .exec(
+            "UPDATE pluts_accounts SET name = 'Cash at bank' WHERE id = ?",
+            acc.id,
+          )
+          .toArray(),
+      ).not.toThrow();
+      expect(
+        sql.exec("SELECT type FROM pluts_accounts WHERE id = ?", acc.id).one(),
+      ).toEqual({ type: "Asset" });
+    });
+  });
+
   it("cannot bind a bigint at all (the bind layer, isolated)", async () => {
     await seeded("attack-bigint-bind", (sql) => {
       // SqlStorage binds numbers, not bigints — the 2^53 ceiling enforced by
