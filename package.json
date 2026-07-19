@@ -46,7 +46,7 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@cloudflare/workers-types": ">=4"
+    "@cloudflare/workers-types": ">=4.20240919.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
