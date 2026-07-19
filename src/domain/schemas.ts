@@ -22,18 +22,13 @@ export const amountSchema = z
     z.number().finite().nonnegative(),
     z.string().regex(/^\d+(\.\d+)?$/),
   ])
-  .transform((v) => (v instanceof Amount ? v : Amount.fromMajor(v)))
-  // Every line must move money: a $0.00 leg attaches an account to an entry
-  // that didn't touch it — noise an accountant would query (F-13).
-  .refine((a) => a.isPositive(), {
-    message: "must be greater than zero",
-  })
   .transform((v, ctx) => {
     if (v instanceof Amount) return v;
     // Amount.fromMajor throws RangeError on values its digit parser cannot
-    // represent (e.g. 1e21 stringifies in exponential notation). Schema
-    // transforms must never throw raw errors — report a Zod issue so callers
-    // get the promised path-tagged ValidationError.
+    // represent. The union above pre-filters everything currently known to
+    // trip it, but schema transforms must never throw raw errors — report a
+    // Zod issue instead so callers get the promised path-tagged
+    // ValidationError rather than a crash escaping `safeParse` (F-27).
     try {
       return Amount.fromMajor(v);
     } catch (e) {
@@ -43,6 +38,16 @@ export const amountSchema = z
       });
       return z.NEVER;
     }
+  })
+  // Every line must move money: a $0.00 leg attaches an account to an entry
+  // that didn't touch it — noise an accountant would query (F-13).
+  //
+  // Zod runs this refinement even when the transform above reported an issue
+  // (`z.NEVER` is `undefined` at runtime), so guard the instance check first —
+  // otherwise a failed parse crashes here, or stacks a bogus positivity issue
+  // on top of the real one.
+  .refine((a) => !(a instanceof Amount) || a.isPositive(), {
+    message: "must be greater than zero",
   });
 
 /**
