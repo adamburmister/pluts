@@ -55,6 +55,57 @@ export function isValidISODate(s: string): boolean {
 }
 
 /**
+ * The library's default "today": the **UTC** calendar day.
+ *
+ * Every date in Pluts is a bare `yyyy-mm-dd` calendar date with no attached
+ * offset, so "today" is only well-defined relative to a chosen zone, and the
+ * chosen zone here is UTC. In a zone at UTC+N the local date runs ahead of
+ * the UTC date until the local clock reaches N:00, so an entry posted before
+ * then defaults to *yesterday* — 08:00 in UTC+8, 13:00 in UTC+13 (NZDT).
+ * At a month boundary that silently moves it into the previous reporting
+ * period.
+ *
+ * Consumers that need a local calendar day should pass
+ * {@link todayInTimeZone} as the `Ledger`'s `today` option, or supply an
+ * explicit `date` on every entry.
+ */
+export function utcToday(at: Date = new Date()): string {
+  return toDateISO(at);
+}
+
+/**
+ * Builds a "today" function for an IANA time zone, for use as the `Ledger`
+ * `today` option: `new Ledger(repo, { today: todayInTimeZone("Pacific/Auckland") })`.
+ *
+ * Throws `RangeError` immediately for an unknown zone, so a typo fails at
+ * construction rather than silently defaulting dates to UTC at posting time.
+ */
+export function todayInTimeZone(timeZone: string): (at?: Date) => string {
+  // Constructing eagerly is what surfaces an invalid zone as a RangeError.
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return (at: Date = new Date()) => {
+    // Assemble from parts rather than `format()`: the formatted string is a
+    // locale *display* form (separators, ordering, and even numbering system
+    // vary with the runtime's ICU data), while the parts are the raw fields.
+    const parts = formatter.formatToParts(at);
+    const field = (type: "year" | "month" | "day") =>
+      parts.find((p) => p.type === type)?.value ?? "";
+    const iso = `${field("year").padStart(4, "0")}-${field("month").padStart(2, "0")}-${field("day").padStart(2, "0")}`;
+    if (!isValidISODate(iso)) {
+      throw new RangeError(
+        `Time zone ${timeZone} produced a non-ISO date: ${iso}`,
+      );
+    }
+    return iso;
+  };
+}
+
+/**
  * Normalizes a Date | string to an ISO yyyy-mm-dd string.
  * Throws RangeError on malformed strings or invalid Dates; public API paths
  * validate first via Zod (see `isoDateSchema`), so this throw is the

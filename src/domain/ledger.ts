@@ -15,7 +15,7 @@ import {
   type EntryInput,
   toIssues,
 } from "./schemas.js";
-import { AccountType, type DateRange } from "./types.js";
+import { AccountType, type DateRange, utcToday } from "./types.js";
 
 /**
  * Balances are signed `bigint` minor units. A balance may legitimately be
@@ -77,13 +77,33 @@ function asOfRange(asOf?: Date | string): DateRange | undefined {
   return asOf === undefined ? undefined : { toDate: asOf };
 }
 
+/** Construction options for {@link Ledger}. */
+export interface LedgerOptions {
+  /**
+   * Supplies the `yyyy-mm-dd` used when {@link Ledger.postEntry} is called
+   * without a `date`. Defaults to {@link utcToday} — the **UTC** calendar
+   * day. Pass `todayInTimeZone("Pacific/Auckland")` (or any function
+   * returning an ISO date) to default entries to a local calendar day
+   * instead; east of UTC the two differ for a large part of the working day
+   * and can straddle a month-end period boundary.
+   */
+  today?: () => string;
+}
+
 /**
  * High-level facade over a {@link Repository}. Provides the accounting
  * operations of the Pluts domain: account creation, entry posting, and
  * balance/report queries. This is the primary public API surface.
  */
 export class Ledger {
-  constructor(private readonly repo: Repository) {}
+  private readonly today: () => string;
+
+  constructor(
+    private readonly repo: Repository,
+    options: LedgerOptions = {},
+  ) {
+    this.today = options.today ?? utcToday;
+  }
 
   /**
    * Validate and normalize an optional date range before it reaches the
@@ -126,6 +146,9 @@ export class Ledger {
    * directly (`account`) or by name (`accountName`, resolved against the repo).
    * Amounts accept `number | string | Amount`. Throws {@link ValidationError}
    * on failure with a flat list of path-tagged issues.
+   *
+   * An omitted `date` defaults to the **UTC** calendar day unless a `today`
+   * option was passed to the constructor (see {@link LedgerOptions.today}).
    */
   async postEntry(input: EntryInput): Promise<Entry> {
     // Prefetch account names for the resolver. Tolerate malformed shapes
@@ -152,6 +175,7 @@ export class Ledger {
     const payload: EntryPayload = buildEntry(
       input,
       (name) => accountMap.get(name) ?? null,
+      this.today,
     );
 
     // Exactly-once posting: a byte-identical retry (network replay, DO

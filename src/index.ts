@@ -47,6 +47,7 @@ export {
   type BalanceSheet,
   type IncomeStatement,
   Ledger,
+  type LedgerOptions,
   type TrialBalanceReport,
   type TrialBalanceRow,
 } from "./domain/ledger.js";
@@ -66,4 +67,6 @@ export {
   isValidISODate,
   normalCreditBalance,
   toDateISO,
+  todayInTimeZone,
+  utcToday,
 } from "./domain/types.js";
