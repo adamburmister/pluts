@@ -61,11 +61,15 @@ describe("SqlStorageRepository (real SQLite)", () => {
 
     expect(formatAmount(await ledger.accountBalance(cash))).toBe("150.00");
     // SQL date-range filtering (lexicographic on TEXT) matches the domain.
-    const janOnly = await ledger.accountBalance(cash, {
+    const janOnly = await ledger.accountMovement(cash, {
       fromDate: "2026-01-01",
       toDate: "2026-01-31",
     });
     expect(formatAmount(janOnly)).toBe("100.00");
+    // As-of balance is cumulative from inception.
+    expect(formatAmount(await ledger.accountBalance(cash, "2026-01-31"))).toBe(
+      "100.00",
+    );
     expect(formatAmount(await ledger.balanceByType(AccountType.Revenue))).toBe(
       "150.00",
     );

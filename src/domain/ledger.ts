@@ -217,28 +217,84 @@ export class Ledger {
     return this.repo.allAccounts();
   }
 
-  /** Balance of a single account, optionally within a date range. */
-  async accountBalance(account: Account, range?: DateRange): Promise<bigint> {
-    const parsedRange = this.parseRange(range);
+  /**
+   * Net debit/credit sum for one account over an already-validated range,
+   * oriented to the account's normal balance. The shared primitive behind
+   * both balance (as-of) and movement (period) queries.
+   */
+  private async netForAccount(
+    account: Account,
+    range?: DateRange,
+  ): Promise<bigint> {
     const [credits, debits] = await Promise.all([
-      this.repo.sumCredits(account.id, parsedRange),
-      this.repo.sumDebits(account.id, parsedRange),
+      this.repo.sumCredits(account.id, range),
+      this.repo.sumDebits(account.id, range),
     ]);
     return computeBalance(account.type, account.contra, credits, debits);
   }
 
-  /** Aggregate balance of all accounts of a type (contra accounts subtracted). */
-  async balanceByType(type: AccountType, range?: DateRange): Promise<bigint> {
-    range = this.parseRange(range);
+  /**
+   * Aggregate net sum for all accounts of a type (contra subtracted) over an
+   * already-validated range. Shared by the public balance/movement methods
+   * and the report builders, which pass ranges they validated themselves.
+   */
+  private async netByType(
+    type: AccountType,
+    range?: DateRange,
+  ): Promise<bigint> {
     const accounts = await this.repo.getAccountsByType(type);
     const balances = await Promise.all(
       accounts.map(async (a) => ({
         type: a.type,
         contra: a.contra,
-        balance: await this.accountBalance(a, range),
+        balance: await this.netForAccount(a, range),
       })),
     );
     return aggregateBalances(balances, type);
+  }
+
+  /**
+   * Balance of a single account: cumulative from inception up to and
+   * including `asOf` (default: everything). Point-in-time by construction —
+   * a from-bounded "balance" is really a period movement and was misleading
+   * for balance-sheet accounts (#26); use {@link accountMovement} for that.
+   */
+  async accountBalance(
+    account: Account,
+    asOf?: Date | string,
+  ): Promise<bigint> {
+    return this.netForAccount(account, this.parseRange(asOfRange(asOf)));
+  }
+
+  /**
+   * Net movement of a single account within `range`, oriented to the
+   * account's normal balance (e.g. a cash inflow is positive for an asset).
+   * For P&L accounts this is the period figure an income statement reports;
+   * for balance-sheet accounts it is the period *change*, not a balance.
+   */
+  async accountMovement(account: Account, range: DateRange): Promise<bigint> {
+    return this.netForAccount(account, this.parseRange(range));
+  }
+
+  /**
+   * Aggregate balance of all accounts of a type (contra accounts
+   * subtracted), cumulative up to `asOf` (default: everything). See
+   * {@link accountBalance} for the balance/movement split; use
+   * {@link movementByType} for period figures.
+   */
+  async balanceByType(
+    type: AccountType,
+    asOf?: Date | string,
+  ): Promise<bigint> {
+    return this.netByType(type, this.parseRange(asOfRange(asOf)));
+  }
+
+  /**
+   * Aggregate net movement of all accounts of a type (contra subtracted)
+   * within `range`. The building block of period (flow) reporting.
+   */
+  async movementByType(type: AccountType, range: DateRange): Promise<bigint> {
+    return this.netByType(type, this.parseRange(range));
   }
 
   /**
@@ -252,11 +308,11 @@ export class Ledger {
   async trialBalance(asOf?: Date | string): Promise<bigint> {
     const range = this.parseRange(asOfRange(asOf));
     const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
-      this.balanceByType(AccountType.Asset, range),
-      this.balanceByType(AccountType.Liability, range),
-      this.balanceByType(AccountType.Equity, range),
-      this.balanceByType(AccountType.Revenue, range),
-      this.balanceByType(AccountType.Expense, range),
+      this.netByType(AccountType.Asset, range),
+      this.netByType(AccountType.Liability, range),
+      this.netByType(AccountType.Equity, range),
+      this.netByType(AccountType.Revenue, range),
+      this.netByType(AccountType.Expense, range),
     ]);
     return assets - (liabilities + equity + revenue - expenses);
   }
@@ -306,11 +362,11 @@ export class Ledger {
   async balanceSheet(asOf?: Date | string): Promise<BalanceSheet> {
     const range = this.parseRange(asOfRange(asOf));
     const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
-      this.balanceByType(AccountType.Asset, range),
-      this.balanceByType(AccountType.Liability, range),
-      this.balanceByType(AccountType.Equity, range),
-      this.balanceByType(AccountType.Revenue, range),
-      this.balanceByType(AccountType.Expense, range),
+      this.netByType(AccountType.Asset, range),
+      this.netByType(AccountType.Liability, range),
+      this.netByType(AccountType.Equity, range),
+      this.netByType(AccountType.Revenue, range),
+      this.netByType(AccountType.Expense, range),
     ]);
     // Net income (revenue - expenses) is retained earnings, part of equity on
     // a real balance sheet. The balanced check includes it so the accounting
@@ -328,8 +384,8 @@ export class Ledger {
   async incomeStatement(range?: DateRange): Promise<IncomeStatement> {
     range = this.parseRange(range);
     const [revenue, expenses] = await Promise.all([
-      this.balanceByType(AccountType.Revenue, range),
-      this.balanceByType(AccountType.Expense, range),
+      this.netByType(AccountType.Revenue, range),
+      this.netByType(AccountType.Expense, range),
     ]);
     return {
       revenue,

@@ -193,9 +193,14 @@ await ledger.postEntry({
   ],
 });
 
-// Balances
+// Balances (point-in-time, cumulative from inception to an optional as-of date)
 await ledger.accountBalance(cash); // per-account
+await ledger.accountBalance(cash, "2024-12-31"); // as of a date
 await ledger.balanceByType(AccountType.Asset); // per-type
+
+// Movements (net change within a period — the flow counterpart to a balance)
+await ledger.accountMovement(cash, { fromDate: "2024-01-01", toDate: "2024-12-31" });
+await ledger.movementByType(AccountType.Revenue, { fromDate: "2024-01-01" });
 await ledger.trialBalance(); // should be zero
 await ledger.trialBalanceReport("2024-12-31"); // classic listing: per-account debit/credit columns + totals
 
@@ -219,16 +224,24 @@ await ledger.createAccount({
 });
 ```
 
-### Date ranges
+### Balances vs movements
 
-Balance methods accept an optional `{ fromDate, toDate }` (Date or `yyyy-mm-dd` string):
+A **balance** is point-in-time: cumulative from inception up to an optional
+as-of date (Date or `yyyy-mm-dd` string). A **movement** is a period figure:
+the net change within a `{ fromDate, toDate }` range. The distinction matters
+for balance-sheet accounts — June's net cash *movement* is not the cash
+*balance* — so the API keeps them separate:
 
 ```ts
-await ledger.accountBalance(cash, {
-  fromDate: "2024-01-01",
-  toDate: new Date(),
-});
+await ledger.accountBalance(cash, "2024-06-30"); // balance as of 30 June
+await ledger.accountMovement(cash, {
+  fromDate: "2024-06-01",
+  toDate: "2024-06-30",
+}); // net change during June
 ```
+
+Either bound of a movement range may be omitted; an unbounded movement equals
+the all-time balance.
 
 ### Dates and time zones
 
