@@ -489,7 +489,7 @@ describe("Ledger (in-memory)", () => {
       );
       // Assets == Liabilities + Equity
       const bs = await ledger.balanceSheet();
-      expect(bs.balanced).toBe(0n);
+      expect(bs.imbalance).toBe(0n);
     });
   });
 
@@ -661,11 +661,11 @@ describe("Ledger (in-memory)", () => {
 
       const asOfJan = await ledger.balanceSheet("2024-01-31");
       expect(formatAmount(asOfJan.assets)).toBe("500.00");
-      expect(asOfJan.balanced).toBe(0n);
+      expect(asOfJan.imbalance).toBe(0n);
 
       const latest = await ledger.balanceSheet();
       expect(formatAmount(latest.assets)).toBe("300.00");
-      expect(latest.balanced).toBe(0n);
+      expect(latest.imbalance).toBe(0n);
     });
 
     it("produces a balance sheet that balances", async () => {
@@ -679,7 +679,7 @@ describe("Ledger (in-memory)", () => {
       const bs = await ledger.balanceSheet();
       expect(formatAmount(bs.assets)).toBe("500.00");
       expect(formatAmount(bs.equity)).toBe("500.00");
-      expect(bs.balanced).toBe(0n);
+      expect(bs.imbalance).toBe(0n);
     });
 
     it("reconciles the accounting equation from returned fields when net income exists", async () => {
@@ -708,7 +708,7 @@ describe("Ledger (in-memory)", () => {
       // The equation reconciles using only the returned fields — no consumer
       // needs to fetch the income statement separately to make it add up.
       expect(bs.assets).toBe(bs.liabilities + bs.equity + bs.netIncome);
-      expect(bs.balanced).toBe(0n);
+      expect(bs.imbalance).toBe(0n);
     });
 
     it("produces an income statement", async () => {

@@ -106,7 +106,7 @@ describe("SqlStorageRepository (real SQLite)", () => {
       "600.00",
     );
     const bs = await ledger.balanceSheet();
-    expect(bs.balanced).toBe(0n);
+    expect(bs.imbalance).toBe(0n);
   });
 
   it("loads entries, per-account entries, and amounts", async () => {

@@ -208,7 +208,10 @@ await ledger.trialBalanceReport("2024-12-31"); // classic listing: per-account d
 
 // Reports. Balance sheet and trial balance are point-in-time (asOf);
 // the income statement is a period (flow) statement and takes a range.
-await ledger.balanceSheet("2024-12-31"); // { assets, liabilities, equity, netIncome, balanced }
+// `imbalance` is the residual assets - (liabilities + equity + netIncome):
+// 0n in a healthy ledger. (Distinct from `trialBalanceReport`'s boolean
+// `balanced` — a residual, not a verdict.)
+await ledger.balanceSheet("2024-12-31"); // { assets, liabilities, equity, netIncome, imbalance }
 await ledger.incomeStatement({ fromDate: "2024-01-01" }); // { revenue, expenses, netIncome }
 
 // The journal is unbounded — page it. Bounds must be non-negative integers.
