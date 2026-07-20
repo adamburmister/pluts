@@ -12,7 +12,11 @@ import {
   type Entry,
   type EntryPayload,
 } from "./entry.js";
-import { IdempotencyConflictError, ValidationError } from "./errors.js";
+import {
+  IdempotencyConflictError,
+  ValidationError,
+  type ValidationIssue,
+} from "./errors.js";
 import {
   type CreateAccountInput,
   createAccountSchema,
@@ -179,40 +183,108 @@ export class Ledger {
 
   /**
    * Validate and persist an entry. Each amount may reference an account either
-   * directly (`account`) or by name (`accountName`, resolved against the repo).
-   * Amounts accept `number | string | Amount`. Throws {@link ValidationError}
-   * on failure with a flat list of path-tagged issues.
+   * directly (`account`) or by name (`accountName`); either way the account
+   * must exist in this ledger. Amounts accept `number | string | Amount`.
+   * Throws {@link ValidationError} on failure with a flat list of path-tagged
+   * issues — nothing is written.
    *
    * An omitted `date` defaults to the **UTC** calendar day unless a `today`
    * option was passed to the constructor (see {@link LedgerOptions.today}).
    */
-  async postEntry(input: EntryInput): Promise<Entry> {
-    // Prefetch account names for the resolver. Tolerate malformed shapes
-    // here — buildEntry's schema parse below is the validation authority and
-    // turns them into a path-tagged ValidationError; blowing up in this scan
-    // would surface a raw TypeError instead.
+  /**
+   * Look up, in one pass before validation, every account an entry's lines
+   * refer to: by name for `accountName` lines, by id for lines carrying an
+   * `Account` object. Returns the resolved name map plus the set of ids the
+   * ledger actually holds.
+   *
+   * Tolerates malformed shapes — buildEntry's schema parse is the validation
+   * authority, and blowing up in this scan would surface a raw TypeError
+   * instead of a path-tagged ValidationError.
+   */
+  private async prefetchAccounts(
+    input: EntryInput,
+  ): Promise<{ byName: Map<string, Account>; knownIds: Set<string> }> {
     const names = new Set<string>();
+    const ids = new Set<string>();
     const lines = [
       ...(Array.isArray(input.debits) ? input.debits : []),
       ...(Array.isArray(input.credits) ? input.credits : []),
     ];
-    for (const a of lines) {
-      if (typeof a?.accountName === "string" && a.accountName) {
-        names.add(a.accountName);
+    for (const line of lines) {
+      if (typeof line?.accountName === "string" && line.accountName) {
+        names.add(line.accountName);
+      }
+      if (typeof line?.account?.id === "string" && line.account.id) {
+        ids.add(line.account.id);
       }
     }
-    const accountMap = new Map<string, Account>();
+
+    const byName = new Map<string, Account>();
     for (const name of names) {
-      const acc = await this.repo.getAccountByName(name);
-      if (acc) accountMap.set(name, acc);
+      const found = await this.repo.getAccountByName(name);
+      if (found) byName.set(name, found);
     }
+
+    // A name that resolved names an account that exists by definition; only
+    // the caller-supplied ids still need confirming.
+    const knownIds = new Set<string>(
+      [...byName.values()].map((account) => account.id),
+    );
+    for (const id of ids) {
+      if (knownIds.has(id)) continue;
+      const found = await this.repo.getAccount(id);
+      if (found) knownIds.add(id);
+    }
+    return { byName, knownIds };
+  }
+
+  /**
+   * Reject lines whose `Account` object is not an account of *this* ledger.
+   *
+   * An `Account` handed to {@link postEntry} is caller-supplied data, not a
+   * capability: it can be hand-built, stale, or borrowed from another
+   * ledger's Durable Object. Left unchecked it reaches the foreign-key
+   * constraint and surfaces as an opaque `RepositoryError`, while the same
+   * mistake spelled as an `accountName` gives a path-tagged
+   * {@link ValidationError} (issue #29). Both spellings get one contract.
+   *
+   * Runs on the built payload, where every line resolved, so line indices
+   * still match the caller's input.
+   */
+  private assertAccountsExist(
+    payload: EntryPayload,
+    knownIds: ReadonlySet<string>,
+  ): void {
+    const issues: ValidationIssue[] = [];
+    const check = (
+      lines: EntryPayload["debits"],
+      root: "debits" | "credits",
+    ) => {
+      lines.forEach((line, index) => {
+        if (knownIds.has(line.account.id)) return;
+        issues.push({
+          path: [root, index, "account"],
+          message: `Account "${line.account.id}" not found`,
+        });
+      });
+    };
+    check(payload.debits, "debits");
+    check(payload.credits, "credits");
+    if (issues.length > 0) {
+      throw new ValidationError(issues, "Unknown account");
+    }
+  }
+
+  async postEntry(input: EntryInput): Promise<Entry> {
+    const { byName, knownIds } = await this.prefetchAccounts(input);
 
     // Validate FIRST — an invalid payload is invalid input, never a dedup hit.
     const payload: EntryPayload = buildEntry(
       input,
-      (name) => accountMap.get(name) ?? null,
+      (name) => byName.get(name) ?? null,
       this.today,
     );
+    this.assertAccountsExist(payload, knownIds);
 
     // Exactly-once posting: a byte-identical retry (network replay, DO
     // re-execution after eviction) returns the already-persisted entry. The
