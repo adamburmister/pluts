@@ -23,7 +23,28 @@ import {
   type DateRange,
   toDateISO,
 } from "../domain/types.js";
-import type { Repository } from "./repository.js";
+import type {
+  AccountTotals,
+  AccountTotalsOptions,
+  EntryPageOptions,
+  Repository,
+} from "./repository.js";
+
+/**
+ * Upper bound on placeholders in a generated `IN (...)` list. SQLite caps the
+ * number of bound parameters per statement, so id lists are queried in chunks.
+ * Chunking stays synchronous — no `await` between chunks — so the reads remain
+ * one consistent view of the database.
+ */
+const MAX_IN_CLAUSE_IDS = 100;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
 
 /**
  * Bridge a minor-units `bigint` onto SqlStorage's `number` bind type.
@@ -394,16 +415,25 @@ export class SqlStorageRepository implements Repository {
     return row ? this.loadEntry(row) : null;
   }
 
-  async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
+  async allEntries(
+    order: "asc" | "desc" = "desc",
+    page: EntryPageOptions = {},
+  ): Promise<Entry[]> {
     const dir = order === "asc" ? "ASC" : "DESC";
+    // SQLite requires a LIMIT before an OFFSET; -1 means "no limit".
+    const limit = page.limit ?? -1;
+    const offset = page.offset ?? 0;
     const rows = this.sql
       .exec<EntryRow>(
-        `SELECT id, description, date, posted_at, seq FROM pluts_entries ORDER BY date ${dir}, seq ${dir}`,
+        `SELECT id, description, date, posted_at, seq
+         FROM pluts_entries
+         ORDER BY date ${dir}, seq ${dir}
+         LIMIT ? OFFSET ?`,
+        limit,
+        offset,
       )
       .toArray();
-    // loadEntry issues its own exec per entry. SqlStorage cursors are consumed
-    // synchronously inside loadEntry, so iterating here is safe.
-    return rows.map((r) => this.loadEntry(r));
+    return this.loadEntries(rows);
   }
 
   async sumCredits(accountId: string, range?: DateRange): Promise<Amount> {
@@ -461,7 +491,54 @@ export class SqlStorageRepository implements Repository {
         accountId,
       )
       .toArray();
-    return rows.map((r) => this.loadEntry(r));
+    return this.loadEntries(rows);
+  }
+
+  async accountTotals(
+    options: AccountTotalsOptions = {},
+  ): Promise<AccountTotals[]> {
+    const rangeClause = dateRangeClause(options.range);
+    const typeClause = options.type ? " WHERE acc.type = ?" : "";
+    const typeBinds = options.type ? [options.type] : [];
+    // The date range filters the amounts *inside* the joined subquery, not the
+    // outer result: an account whose amounts all fall outside the range must
+    // still appear, with zero totals.
+    const rows = this.sql
+      .exec<{
+        [key: string]: SqlStorageValue;
+        id: string;
+        name: string;
+        type: string;
+        contra: number;
+        created_at: string;
+        credits: number;
+        debits: number;
+      }>(
+        `SELECT acc.id, acc.name, acc.type, acc.contra, acc.created_at,
+                COALESCE(SUM(CASE WHEN a.type = 'credit' THEN a.amount END), 0) AS credits,
+                COALESCE(SUM(CASE WHEN a.type = 'debit' THEN a.amount END), 0) AS debits
+         FROM pluts_accounts acc
+         LEFT JOIN (
+           SELECT a.account_id, a.type, a.amount
+           FROM pluts_amounts a
+           INNER JOIN pluts_entries e ON e.id = a.entry_id
+           WHERE 1 = 1${rangeClause.sql}
+         ) a ON a.account_id = acc.id${typeClause}
+         GROUP BY acc.id
+         ORDER BY acc.name ASC`,
+        ...rangeClause.binds,
+        ...typeBinds,
+      )
+      .toArray();
+    return rows.map((row) => ({
+      account: toAccount(row),
+      credits: Amount.fromMinor(
+        fromStorageInt(row.credits, `credits for account ${row.id}`),
+      ),
+      debits: Amount.fromMinor(
+        fromStorageInt(row.debits, `debits for account ${row.id}`),
+      ),
+    }));
   }
 
   private async sumAmounts(
@@ -486,40 +563,75 @@ export class SqlStorageRepository implements Repository {
 
   /** Builds a fully-formed immutable Entry from a row, loading its amounts. */
   private loadEntry(row: EntryRow): Entry {
-    const amounts = this.sql
-      .exec<AmountRow>(
-        "SELECT id, type, account_id, entry_id, amount FROM pluts_amounts WHERE entry_id = ?",
+    const entries = this.loadEntries([row]);
+    const entry = entries[0];
+    if (!entry) throw new RepositoryError(`Failed to load entry ${row.id}`);
+    return entry;
+  }
+
+  /**
+   * Builds Entries for a batch of entry rows, fetching every amount in one
+   * query per chunk of ids instead of one query per entry (which made journal
+   * reads O(entries) round-trips).
+   */
+  private loadEntries(rows: EntryRow[]): Entry[] {
+    if (rows.length === 0) return [];
+    const amountRows: AmountRow[] = [];
+    for (const ids of chunk(
+      rows.map((r) => r.id),
+      MAX_IN_CLAUSE_IDS,
+    )) {
+      const placeholders = ids.map(() => "?").join(", ");
+      amountRows.push(
+        ...this.sql
+          .exec<AmountRow>(
+            `SELECT id, type, account_id, entry_id, amount
+             FROM pluts_amounts
+             WHERE entry_id IN (${placeholders})`,
+            ...ids,
+          )
+          .toArray(),
+      );
+    }
+
+    const byEntry = new Map<string, AmountRecord[]>();
+    for (const record of this.hydrateAmounts(amountRows)) {
+      const list = byEntry.get(record.entryId);
+      if (list) list.push(record);
+      else byEntry.set(record.entryId, [record]);
+    }
+
+    return rows.map((row) => {
+      const records = byEntry.get(row.id) ?? [];
+      return new Entry(
         row.id,
-      )
-      .toArray();
-    const records = this.hydrateAmounts(amounts);
-    const debits = records.filter((r) => r.kind === "debit");
-    const credits = records.filter((r) => r.kind === "credit");
-    return new Entry(
-      row.id,
-      row.description,
-      row.date,
-      debits,
-      credits,
-      row.posted_at,
-      row.seq,
-    );
+        row.description,
+        row.date,
+        records.filter((r) => r.kind === "debit"),
+        records.filter((r) => r.kind === "credit"),
+        row.posted_at,
+        row.seq,
+      );
+    });
   }
 
   private hydrateAmounts(rows: AmountRow[]): AmountRecord[] {
     if (rows.length === 0) return [];
     const accountIds = [...new Set(rows.map((r) => r.account_id))];
-    // SqlStorage.exec takes a fixed number of placeholders; build a single
-    // IN (...) query with one ? per id. No await between the exec and the
-    // .toArray() consumption, so the cursor is safe.
-    const placeholders = accountIds.map(() => "?").join(", ");
-    const accountRows = this.sql
-      .exec<AccountRow>(
-        `SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE id IN (${placeholders})`,
-        ...accountIds,
-      )
-      .toArray();
-    const accountMap = new Map(accountRows.map((r) => [r.id, toAccount(r)]));
+    // SqlStorage.exec takes a fixed number of placeholders; build an IN (...)
+    // query with one ? per id, chunked under SQLite's parameter cap. No await
+    // between an exec and its .toArray() consumption, so the cursors are safe.
+    const accountMap = new Map<string, Account>();
+    for (const ids of chunk(accountIds, MAX_IN_CLAUSE_IDS)) {
+      const placeholders = ids.map(() => "?").join(", ");
+      const accountRows = this.sql
+        .exec<AccountRow>(
+          `SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE id IN (${placeholders})`,
+          ...ids,
+        )
+        .toArray();
+      for (const r of accountRows) accountMap.set(r.id, toAccount(r));
+    }
     return rows.map((r) => {
       const account = accountMap.get(r.account_id);
       if (!account)

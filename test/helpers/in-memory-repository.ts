@@ -1,4 +1,9 @@
-import type { Repository } from "../../src/db/repository";
+import type {
+  AccountTotals,
+  AccountTotalsOptions,
+  EntryPageOptions,
+  Repository,
+} from "../../src/db/repository";
 import { Account } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
 import {
@@ -184,7 +189,10 @@ export class InMemoryRepository implements Repository {
     return mem ? this.toEntry(mem) : null;
   }
 
-  async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
+  async allEntries(
+    order: "asc" | "desc" = "desc",
+    page: EntryPageOptions = {},
+  ): Promise<Entry[]> {
     const list = [...this.entries.values()];
     // Deterministic journal order: date first, then posting sequence.
     list.sort((a, b) =>
@@ -192,7 +200,25 @@ export class InMemoryRepository implements Repository {
         ? a.date.localeCompare(b.date) || a.seq - b.seq
         : b.date.localeCompare(a.date) || b.seq - a.seq,
     );
-    return list.map((m) => this.toEntry(m));
+    const offset = page.offset ?? 0;
+    const windowed =
+      page.limit === undefined
+        ? list.slice(offset)
+        : list.slice(offset, offset + page.limit);
+    return windowed.map((m) => this.toEntry(m));
+  }
+
+  async accountTotals(
+    options: AccountTotalsOptions = {},
+  ): Promise<AccountTotals[]> {
+    return [...this.accounts.values()]
+      .filter((rec) => options.type === undefined || rec.type === options.type)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((rec) => ({
+        account: this.toAccount(rec),
+        credits: this.sum(rec.credits, options.range),
+        debits: this.sum(rec.debits, options.range),
+      }));
   }
 
   async entrySequenceStats(): Promise<{ count: number; maxSeq: number }> {

@@ -1,4 +1,8 @@
-import type { Repository } from "../db/repository.js";
+import type {
+  AccountTotals,
+  EntryPageOptions,
+  Repository,
+} from "../db/repository.js";
 import { type Account, aggregateBalances, computeBalance } from "./account.js";
 import {
   type AmountRecord,
@@ -75,6 +79,20 @@ export interface TrialBalanceReport {
 /** Normalize an optional as-of date to the DateRange the repository expects. */
 function asOfRange(asOf?: Date | string): DateRange | undefined {
   return asOf === undefined ? undefined : { toDate: asOf };
+}
+
+/**
+ * Turn per-account credit/debit totals into the type/contra/balance shape
+ * {@link aggregateBalances} consumes.
+ */
+function toBalances(
+  totals: readonly AccountTotals[],
+): { type: AccountType; contra: boolean; balance: bigint }[] {
+  return totals.map(({ account, credits, debits }) => ({
+    type: account.type,
+    contra: account.contra,
+    balance: computeBalance(account.type, account.contra, credits, debits),
+  }));
 }
 
 /** Construction options for {@link Ledger}. */
@@ -237,20 +255,19 @@ export class Ledger {
    * Aggregate net sum for all accounts of a type (contra subtracted) over an
    * already-validated range. Shared by the public balance/movement methods
    * and the report builders, which pass ranges they validated themselves.
+   *
+   * One repository call, so every account is summed from the same view of the
+   * ledger — see {@link Repository.accountTotals}.
    */
   private async netByType(
     type: AccountType,
     range?: DateRange,
   ): Promise<bigint> {
-    const accounts = await this.repo.getAccountsByType(type);
-    const balances = await Promise.all(
-      accounts.map(async (a) => ({
-        type: a.type,
-        contra: a.contra,
-        balance: await this.netForAccount(a, range),
-      })),
-    );
-    return aggregateBalances(balances, type);
+    const totals = await this.repo.accountTotals({
+      type,
+      ...(range !== undefined ? { range } : {}),
+    });
+    return aggregateBalances(toBalances(totals), type);
   }
 
   /**
@@ -298,6 +315,33 @@ export class Ledger {
   }
 
   /**
+   * Net sum of every account type over an already-validated range, from a
+   * single repository read.
+   *
+   * The multi-type reports (trial balance, balance sheet, income statement)
+   * all derive from this: one query means every figure in a statement
+   * describes the same instant of the ledger, so a write landing mid-report
+   * cannot make the statement contradict itself.
+   */
+  private async netsByType(
+    range: DateRange | undefined,
+  ): Promise<Record<AccountType, bigint>> {
+    const balances = toBalances(
+      await this.repo.accountTotals(range !== undefined ? { range } : {}),
+    );
+    return {
+      [AccountType.Asset]: aggregateBalances(balances, AccountType.Asset),
+      [AccountType.Liability]: aggregateBalances(
+        balances,
+        AccountType.Liability,
+      ),
+      [AccountType.Equity]: aggregateBalances(balances, AccountType.Equity),
+      [AccountType.Revenue]: aggregateBalances(balances, AccountType.Revenue),
+      [AccountType.Expense]: aggregateBalances(balances, AccountType.Expense),
+    };
+  }
+
+  /**
    * Trial balance: should always be zero for a balanced ledger.
    * Asset - (Liability + Equity + Revenue - Expense).
    *
@@ -307,14 +351,14 @@ export class Ledger {
    */
   async trialBalance(asOf?: Date | string): Promise<bigint> {
     const range = this.parseRange(asOfRange(asOf));
-    const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
-      this.netByType(AccountType.Asset, range),
-      this.netByType(AccountType.Liability, range),
-      this.netByType(AccountType.Equity, range),
-      this.netByType(AccountType.Revenue, range),
-      this.netByType(AccountType.Expense, range),
-    ]);
-    return assets - (liabilities + equity + revenue - expenses);
+    const nets = await this.netsByType(range);
+    return (
+      nets[AccountType.Asset] -
+      (nets[AccountType.Liability] +
+        nets[AccountType.Equity] +
+        nets[AccountType.Revenue] -
+        nets[AccountType.Expense])
+    );
   }
 
   /**
@@ -324,15 +368,16 @@ export class Ledger {
    */
   async trialBalanceReport(asOf?: Date | string): Promise<TrialBalanceReport> {
     const range = this.parseRange(asOfRange(asOf));
-    const accounts = await this.repo.allAccounts();
+    // One query for the whole listing: per-account sums with awaits between
+    // them could interleave with a write and produce a report whose rows come
+    // from different ledger states — failing its own balanced check.
+    const totals = await this.repo.accountTotals(
+      range !== undefined ? { range } : {},
+    );
     const rows: TrialBalanceRow[] = [];
     let totalDebits = 0n;
     let totalCredits = 0n;
-    for (const account of accounts) {
-      const [credits, debits] = await Promise.all([
-        this.repo.sumCredits(account.id, range),
-        this.repo.sumDebits(account.id, range),
-      ]);
+    for (const { account, credits, debits } of totals) {
       // Raw debit/credit arithmetic, independent of account type or contra
       // flag: the net lands in whichever column it favors.
       const net = debits.minor - credits.minor;
@@ -361,13 +406,12 @@ export class Ledger {
    */
   async balanceSheet(asOf?: Date | string): Promise<BalanceSheet> {
     const range = this.parseRange(asOfRange(asOf));
-    const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
-      this.netByType(AccountType.Asset, range),
-      this.netByType(AccountType.Liability, range),
-      this.netByType(AccountType.Equity, range),
-      this.netByType(AccountType.Revenue, range),
-      this.netByType(AccountType.Expense, range),
-    ]);
+    const nets = await this.netsByType(range);
+    const assets = nets[AccountType.Asset];
+    const liabilities = nets[AccountType.Liability];
+    const equity = nets[AccountType.Equity];
+    const revenue = nets[AccountType.Revenue];
+    const expenses = nets[AccountType.Expense];
     // Net income (revenue - expenses) is retained earnings, part of equity on
     // a real balance sheet. The balanced check includes it so the accounting
     // equation holds: Assets = Liabilities + Equity + Net Income.
@@ -382,11 +426,9 @@ export class Ledger {
   }
 
   async incomeStatement(range?: DateRange): Promise<IncomeStatement> {
-    range = this.parseRange(range);
-    const [revenue, expenses] = await Promise.all([
-      this.netByType(AccountType.Revenue, range),
-      this.netByType(AccountType.Expense, range),
-    ]);
+    const nets = await this.netsByType(this.parseRange(range));
+    const revenue = nets[AccountType.Revenue];
+    const expenses = nets[AccountType.Expense];
     return {
       revenue,
       expenses,
@@ -402,8 +444,16 @@ export class Ledger {
     return this.repo.amountsForAccount(account.id);
   }
 
-  async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
-    return this.repo.allEntries(order);
+  /**
+   * The journal, newest first by default. A ledger's journal grows without
+   * bound, so pass `page` to window it: `allEntries("desc", { limit: 50 })`,
+   * then walk back with `offset`.
+   */
+  async allEntries(
+    order: "asc" | "desc" = "desc",
+    page: EntryPageOptions = {},
+  ): Promise<Entry[]> {
+    return this.repo.allEntries(order, page);
   }
 
   /**

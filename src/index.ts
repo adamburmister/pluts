@@ -1,4 +1,9 @@
-export type { Repository } from "./db/repository.js";
+export type {
+  AccountTotals,
+  AccountTotalsOptions,
+  EntryPageOptions,
+  Repository,
+} from "./db/repository.js";
 export {
   getLedgerMeta,
   type LedgerMeta,
