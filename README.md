@@ -239,9 +239,12 @@ period reporting:
 2. **A `Date` you pass is converted using its UTC fields**, not the host's
    local zone. `new Date("2026-07-20T08:00")` in Auckland is `2026-07-19`.
 
-For any zone east of UTC — AUD/NZD at UTC+8..+13 — an entry posted before
-local noon therefore defaults to *yesterday*. On the 1st of the month that
-silently files it into the previous reporting period.
+East of UTC the local date runs ahead of the UTC date for part of every day:
+in a zone at UTC+N, an entry posted before the local clock reaches N:00
+defaults to *yesterday*. That cutoff is 08:00 in UTC+8 (AWST), 10:00 in
+UTC+10 (AEST) and 13:00 in UTC+13 (NZDT) — so for an NZ ledger it covers the
+whole morning. On the 1st of the month it silently files the entry into the
+previous reporting period.
 
 To get a local calendar day, construct the ledger with a `today` option:
 

@@ -102,12 +102,16 @@ describe("Ledger today option", () => {
     const ledger = new Ledger(new InMemoryRepository());
     await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
     await ledger.createAccount({ name: "Revenue", type: AccountType.Revenue });
+    // Bracket the post rather than recomputing utcToday() afterwards: a run
+    // straddling 00:00 UTC would otherwise compare two different days.
+    const before = utcToday();
     const entry = await ledger.postEntry({
       description: "Sale",
       debits: [{ accountName: "Cash", amount: 100 }],
       credits: [{ accountName: "Revenue", amount: 100 }],
     });
-    expect(entry.date).toBe(utcToday());
+    const after = utcToday();
+    expect([before, after]).toContain(entry.date);
   });
 
   it("rejects a today() that returns a non-ISO date", async () => {
