@@ -73,6 +73,19 @@ export const dateRangeSchema = z
   })
   .optional();
 
+/**
+ * Optional journal paging window. Both bounds are non-negative integers: a
+ * negative `limit` reaching SQLite means "no limit" (that is how the repository
+ * spells an absent limit), so an unvalidated `limit` from a query string would
+ * silently hydrate the entire journal — the opposite of what the caller asked.
+ */
+export const entryPageSchema = z
+  .object({
+    limit: z.number().int().nonnegative().optional(),
+    offset: z.number().int().nonnegative().optional(),
+  })
+  .optional();
+
 /** Input for account creation. `name` is trimmed; `contra` defaults to false. */
 export const createAccountSchema = z.object({
   name: z.string().trim().min(1),

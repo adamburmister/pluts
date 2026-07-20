@@ -209,10 +209,15 @@ await ledger.trialBalanceReport("2024-12-31"); // classic listing: per-account d
 await ledger.balanceSheet("2024-12-31"); // { assets, liabilities, equity, netIncome, balanced }
 await ledger.incomeStatement({ fromDate: "2024-01-01" }); // { revenue, expenses, netIncome }
 
-// The journal is unbounded — page it.
+// The journal is unbounded — page it. Bounds must be non-negative integers.
 await ledger.allEntries("desc", { limit: 50 }); // newest 50
 await ledger.allEntries("desc", { limit: 50, offset: 50 }); // the next page
 ```
+
+`offset` addresses a position, not a row: an entry posted or backdated between
+two page reads shifts the ordering, so a later page can repeat or skip an
+entry. For an audit walk that must not miss rows, continue from the last
+`(date, seq)` you saw rather than by offset.
 
 Every report is a **single** query, so all of its figures come from one
 consistent view of the ledger: a write landing mid-report cannot produce a

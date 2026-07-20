@@ -38,6 +38,24 @@ import type {
  */
 const MAX_IN_CLAUSE_IDS = 100;
 
+/**
+ * Guard a paging bound: `undefined` (absent) or a non-negative integer.
+ * Anything else — a negative limit above all — would change the meaning of
+ * the query rather than narrow it.
+ */
+function assertPageBound(
+  value: number | undefined,
+  name: "limit" | "offset",
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RepositoryError(
+      `allEntries ${name} must be a non-negative integer, got ${value}`,
+    );
+  }
+  return value;
+}
+
 function chunk<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
@@ -420,9 +438,12 @@ export class SqlStorageRepository implements Repository {
     page: EntryPageOptions = {},
   ): Promise<Entry[]> {
     const dir = order === "asc" ? "ASC" : "DESC";
-    // SQLite requires a LIMIT before an OFFSET; -1 means "no limit".
-    const limit = page.limit ?? -1;
-    const offset = page.offset ?? 0;
+    // SQLite requires a LIMIT before an OFFSET; -1 means "no limit". That
+    // sentinel is why the bounds are checked here as well as at the facade:
+    // a negative limit reaching SQLite reads as "unbounded", so an unchecked
+    // `limit: -1` from a query string would return the whole journal.
+    const limit = assertPageBound(page.limit, "limit") ?? -1;
+    const offset = assertPageBound(page.offset, "offset") ?? 0;
     const rows = this.sql
       .exec<EntryRow>(
         `SELECT id, description, date, posted_at, seq
@@ -498,8 +519,11 @@ export class SqlStorageRepository implements Repository {
     options: AccountTotalsOptions = {},
   ): Promise<AccountTotals[]> {
     const rangeClause = dateRangeClause(options.range);
-    const typeClause = options.type ? " WHERE acc.type = ?" : "";
-    const typeBinds = options.type ? [options.type] : [];
+    const types = options.types ?? [];
+    const typeClause =
+      types.length === 0
+        ? ""
+        : ` WHERE acc.type IN (${types.map(() => "?").join(", ")})`;
     // The date range filters the amounts *inside* the joined subquery, not the
     // outer result: an account whose amounts all fall outside the range must
     // still appear, with zero totals.
@@ -527,7 +551,7 @@ export class SqlStorageRepository implements Repository {
          GROUP BY acc.id
          ORDER BY acc.name ASC`,
         ...rangeClause.binds,
-        ...typeBinds,
+        ...types,
       )
       .toArray();
     return rows.map((row) => ({

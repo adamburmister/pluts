@@ -17,6 +17,7 @@ import {
   createAccountSchema,
   dateRangeSchema,
   type EntryInput,
+  entryPageSchema,
   toIssues,
 } from "./schemas.js";
 import { AccountType, type DateRange, utcToday } from "./types.js";
@@ -94,6 +95,21 @@ function toBalances(
     balance: computeBalance(account.type, account.contra, credits, debits),
   }));
 }
+
+/** Every account type, for reports that span the whole chart of accounts. */
+const ALL_ACCOUNT_TYPES = [
+  AccountType.Asset,
+  AccountType.Liability,
+  AccountType.Equity,
+  AccountType.Revenue,
+  AccountType.Expense,
+] as const;
+
+/** The two types an income statement reports on. */
+const INCOME_STATEMENT_TYPES = [
+  AccountType.Revenue,
+  AccountType.Expense,
+] as const;
 
 /** Construction options for {@link Ledger}. */
 export interface LedgerOptions {
@@ -264,7 +280,7 @@ export class Ledger {
     range?: DateRange,
   ): Promise<bigint> {
     const totals = await this.repo.accountTotals({
-      type,
+      types: [type],
       ...(range !== undefined ? { range } : {}),
     });
     return aggregateBalances(toBalances(totals), type);
@@ -315,30 +331,31 @@ export class Ledger {
   }
 
   /**
-   * Net sum of every account type over an already-validated range, from a
-   * single repository read.
+   * Net sum of each requested account type over an already-validated range,
+   * from a single repository read.
    *
    * The multi-type reports (trial balance, balance sheet, income statement)
    * all derive from this: one query means every figure in a statement
    * describes the same instant of the ledger, so a write landing mid-report
-   * cannot make the statement contradict itself.
+   * cannot make the statement contradict itself. Each report asks only for
+   * the types it reports on — an income statement must not fail because some
+   * unrelated asset account's total left the safe integer range.
    */
-  private async netsByType(
+  private async netsByType<T extends AccountType>(
+    types: readonly T[],
     range: DateRange | undefined,
-  ): Promise<Record<AccountType, bigint>> {
+  ): Promise<Record<T, bigint>> {
     const balances = toBalances(
-      await this.repo.accountTotals(range !== undefined ? { range } : {}),
+      await this.repo.accountTotals({
+        types: [...types],
+        ...(range !== undefined ? { range } : {}),
+      }),
     );
-    return {
-      [AccountType.Asset]: aggregateBalances(balances, AccountType.Asset),
-      [AccountType.Liability]: aggregateBalances(
-        balances,
-        AccountType.Liability,
-      ),
-      [AccountType.Equity]: aggregateBalances(balances, AccountType.Equity),
-      [AccountType.Revenue]: aggregateBalances(balances, AccountType.Revenue),
-      [AccountType.Expense]: aggregateBalances(balances, AccountType.Expense),
-    };
+    const nets = {} as Record<T, bigint>;
+    for (const type of types) {
+      nets[type] = aggregateBalances(balances, type);
+    }
+    return nets;
   }
 
   /**
@@ -351,7 +368,7 @@ export class Ledger {
    */
   async trialBalance(asOf?: Date | string): Promise<bigint> {
     const range = this.parseRange(asOfRange(asOf));
-    const nets = await this.netsByType(range);
+    const nets = await this.netsByType(ALL_ACCOUNT_TYPES, range);
     return (
       nets[AccountType.Asset] -
       (nets[AccountType.Liability] +
@@ -406,7 +423,7 @@ export class Ledger {
    */
   async balanceSheet(asOf?: Date | string): Promise<BalanceSheet> {
     const range = this.parseRange(asOfRange(asOf));
-    const nets = await this.netsByType(range);
+    const nets = await this.netsByType(ALL_ACCOUNT_TYPES, range);
     const assets = nets[AccountType.Asset];
     const liabilities = nets[AccountType.Liability];
     const equity = nets[AccountType.Equity];
@@ -426,7 +443,10 @@ export class Ledger {
   }
 
   async incomeStatement(range?: DateRange): Promise<IncomeStatement> {
-    const nets = await this.netsByType(this.parseRange(range));
+    const nets = await this.netsByType(
+      INCOME_STATEMENT_TYPES,
+      this.parseRange(range),
+    );
     const revenue = nets[AccountType.Revenue];
     const expenses = nets[AccountType.Expense];
     return {
@@ -447,13 +467,39 @@ export class Ledger {
   /**
    * The journal, newest first by default. A ledger's journal grows without
    * bound, so pass `page` to window it: `allEntries("desc", { limit: 50 })`,
-   * then walk back with `offset`.
+   * then walk back with `offset`. Both bounds must be non-negative integers
+   * ({@link ValidationError} otherwise) — a negative limit reaching SQLite
+   * means "unbounded", the opposite of what a caller passing one intends.
+   *
+   * `offset` addresses a position, not a row: an entry posted (or backdated)
+   * between two page reads shifts the ordering under the cursor, so a
+   * subsequent page can repeat or skip an entry. For an audit walk that must
+   * not miss rows, page by the last `(date, seq)` seen instead.
    */
   async allEntries(
     order: "asc" | "desc" = "desc",
     page: EntryPageOptions = {},
   ): Promise<Entry[]> {
-    return this.repo.allEntries(order, page);
+    return this.repo.allEntries(order, this.parsePage(page));
+  }
+
+  /**
+   * Validate a paging window before it reaches the repository. Throws
+   * {@link ValidationError} on a negative or non-integer bound.
+   */
+  private parsePage(page: EntryPageOptions): EntryPageOptions {
+    const parsed = entryPageSchema.safeParse(page);
+    if (!parsed.success) {
+      throw new ValidationError(
+        toIssues(parsed.error.issues),
+        "Invalid page options",
+      );
+    }
+    const { limit, offset } = parsed.data ?? {};
+    return {
+      ...(limit !== undefined ? { limit } : {}),
+      ...(offset !== undefined ? { offset } : {}),
+    };
   }
 
   /**

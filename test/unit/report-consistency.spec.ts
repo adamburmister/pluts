@@ -4,6 +4,7 @@ import { migrate } from "../../src/db/schema";
 import { SqlStorageRepository } from "../../src/db/sqlite-storage-repository";
 import { computeBalance } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
+import { RepositoryError, ValidationError } from "../../src/domain/errors";
 import { Ledger } from "../../src/domain/ledger";
 import { AccountType } from "../../src/domain/types";
 import { nodeSqlStorage } from "../helpers/node-sql-storage";
@@ -86,12 +87,17 @@ describe("report queries (real SQLite)", () => {
   });
 
   it("accountTotals filters by account type", async () => {
-    const assets = await repo.accountTotals({ type: AccountType.Asset });
+    const assets = await repo.accountTotals({ types: [AccountType.Asset] });
     expect(assets.map((t) => t.account.name)).toEqual([
       "Cash",
       "Depreciation",
       "Unused",
     ]);
+    // Several types in one read: an income statement asks for exactly these.
+    const income = await repo.accountTotals({
+      types: [AccountType.Revenue, AccountType.Expense],
+    });
+    expect(income.map((t) => t.account.name)).toEqual(["Expense", "Revenue"]);
   });
 
   it("balanceByType equals the per-account computation", async () => {
@@ -148,6 +154,55 @@ describe("report queries (real SQLite)", () => {
     }
     expect(entries[0]?.debitAmounts[0]?.account.name).toBe("Cash");
     expect(entries[2]?.creditAmounts[0]?.account.name).toBe("Depreciation");
+  });
+
+  it("rejects negative paging bounds instead of reading the whole journal", async () => {
+    // SQLite reads a negative LIMIT as "unbounded" — the sentinel the
+    // repository itself uses for an absent limit — so an unchecked bound from
+    // a query string would return everything.
+    await expect(
+      ledger.allEntries("desc", { limit: -1 }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      ledger.allEntries("desc", { offset: -5 }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      ledger.allEntries("desc", { limit: 1.5 }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    // The repository guards the same seam directly, for callers bypassing the
+    // Ledger facade.
+    await expect(repo.allEntries("desc", { limit: -1 })).rejects.toBeInstanceOf(
+      RepositoryError,
+    );
+  });
+
+  it("builds an income statement without reading unrelated account types", async () => {
+    // Drive one asset account's *total* past SqlStorage's safe-integer range
+    // while every individual amount stays inside it, and spread the credits
+    // so no revenue account's total overflows.
+    const huge = Amount.fromMajor(45_000_000_000_000);
+    for (const name of ["Big A", "Big B", "Big C"]) {
+      await ledger.createAccount({ name, type: AccountType.Revenue });
+      await ledger.postEntry({
+        description: `Whale sale to ${name}`,
+        date: "2026-04-01",
+        debits: [{ accountName: "Cash", amount: huge }],
+        credits: [{ accountName: name, amount: huge }],
+      });
+    }
+
+    // The asset total is now unreadable — a report that touches it fails
+    // (with a RepositoryError from the safe-integer bridge, or a driver-level
+    // RangeError before it, depending on the SQLite binding).
+    await expect(ledger.balanceSheet()).rejects.toThrow();
+
+    // The income statement reads only Revenue and Expense, so an unrelated
+    // asset account cannot take it down.
+    expect(await ledger.incomeStatement()).toEqual({
+      revenue: 25000n + 3n * huge.minor,
+      expenses: 4000n,
+      netIncome: 25000n + 3n * huge.minor - 4000n,
+    });
   });
 
   it("windows the journal with limit and offset", async () => {

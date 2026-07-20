@@ -212,7 +212,10 @@ export class InMemoryRepository implements Repository {
     options: AccountTotalsOptions = {},
   ): Promise<AccountTotals[]> {
     return [...this.accounts.values()]
-      .filter((rec) => options.type === undefined || rec.type === options.type)
+      .filter(
+        (rec) =>
+          options.types === undefined || options.types.includes(rec.type),
+      )
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((rec) => ({
         account: this.toAccount(rec),

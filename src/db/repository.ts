@@ -16,8 +16,12 @@ export interface AccountTotals {
 
 /** Optional filters for {@link Repository.accountTotals}. */
 export interface AccountTotalsOptions {
-  /** Restrict to accounts of this type. Omit for every account. */
-  type?: AccountType;
+  /**
+   * Restrict to accounts of these types. Omit for every account. A report
+   * should ask only for the types it reports on: totals it never uses can
+   * still fail the safe-integer bridge and take the report down with them.
+   */
+  types?: AccountType[];
   /** Restrict the summed amounts to entries in this date range. */
   range?: DateRange;
 }
@@ -83,8 +87,8 @@ export interface Repository {
   sumDebits(accountId: string, range?: DateRange): Promise<Amount>;
 
   /**
-   * Credit and debit totals for every account (optionally filtered by type),
-   * gathered in a **single** query.
+   * Credit and debit totals for every account (optionally filtered by account
+   * type), gathered in a **single** query.
    *
    * Reports must read all accounts from one consistent view of the ledger.
    * Summing account-by-account puts an `await` between the sums, and a write
