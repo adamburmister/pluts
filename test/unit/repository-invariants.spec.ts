@@ -1,19 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { Account } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
+import type { ISODate } from "../../src/domain/branded";
+import { toAccountId } from "../../src/domain/branded";
 import { assertBalanced, type EntryPayload } from "../../src/domain/entry";
 import { ValidationError } from "../../src/domain/errors";
 import { AccountType } from "../../src/domain/types";
 import { InMemoryRepository } from "../helpers/in-memory-repository";
 
+const iso = (s: string): ISODate => s as ISODate;
+
 function acct(name: string, type = AccountType.Asset): Account {
-  return new Account(`id-${name}`, name, type, false, "");
+  return new Account(toAccountId(`id-${name}`), name, type, false, iso(""));
 }
 
 function payload(overrides: Partial<EntryPayload> = {}): EntryPayload {
   return {
     description: "test entry",
-    date: "2026-01-01",
+    date: iso("2026-01-01"),
     debits: [{ account: acct("Cash"), amount: Amount.fromMajor(100) }],
     credits: [
       {
@@ -107,7 +111,7 @@ describe("Repository.insertEntry enforces the balance invariant", () => {
     await expect(
       repo.insertEntry({
         description: "unbalanced",
-        date: "2026-01-01",
+        date: iso("2026-01-01"),
         debits: [{ account: cash, amount: Amount.fromMajor(100) }],
         credits: [{ account: rev, amount: Amount.fromMajor(1) }],
       }),
@@ -130,7 +134,7 @@ describe("Repository.insertEntry enforces the balance invariant", () => {
     await expect(
       repo.insertEntry({
         description: "one-sided",
-        date: "2026-01-01",
+        date: iso("2026-01-01"),
         debits: [{ account: cash, amount: Amount.fromMajor(50) }],
         credits: [],
       }),

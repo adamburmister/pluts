@@ -1,5 +1,6 @@
 import type { Account } from "../domain/account.js";
 import type { Amount } from "../domain/amount.js";
+import type { AccountId, EntryId, IdempotencyKey } from "../domain/branded.js";
 import type { AmountRecord, Entry, EntryPayload } from "../domain/entry.js";
 import { RepositoryError } from "../domain/errors.js";
 import type { AccountType, DateRange } from "../domain/types.js";
@@ -125,7 +126,7 @@ export interface Repository {
     contra: boolean;
   }): Promise<Account>;
 
-  getAccount(id: string): Promise<Account | null>;
+  getAccount(id: AccountId): Promise<Account | null>;
   getAccountByName(name: string): Promise<Account | null>;
   getAccountsByType(type: AccountType): Promise<Account[]>;
   allAccounts(): Promise<Account[]>;
@@ -139,7 +140,7 @@ export interface Repository {
    */
   insertEntry(payload: EntryPayload): Promise<Entry>;
 
-  getEntry(id: string): Promise<Entry | null>;
+  getEntry(id: EntryId): Promise<Entry | null>;
   /**
    * Journal sequence stats: total number of entries and the highest assigned
    * sequence number. With gap-free monotonic numbering these are equal; a
@@ -148,7 +149,7 @@ export interface Repository {
    */
   entrySequenceStats(): Promise<{ count: number; maxSeq: number }>;
   /** Look up an entry by its client-supplied idempotency key, or null if none. */
-  getEntryByKey(key: string): Promise<Entry | null>;
+  getEntryByKey(key: IdempotencyKey): Promise<Entry | null>;
   /**
    * Look up an idempotency-key record: the entry it maps to plus the payload
    * fingerprint recorded at posting time (empty string for rows written
@@ -156,8 +157,8 @@ export interface Repository {
    * (fingerprints match) from a key collision (fingerprints differ).
    */
   getEntryKeyRecord(
-    key: string,
-  ): Promise<{ entryId: string; payloadHash: string } | null>;
+    key: IdempotencyKey,
+  ): Promise<{ entryId: EntryId; payloadHash: string } | null>;
   /**
    * The journal in display order — by entry date, then posting sequence,
    * newest first by default. Pass `page` to window the result: a full
@@ -193,9 +194,9 @@ export interface Repository {
   ): Promise<Entry[]>;
 
   /** Sum of credit amounts for an account, optionally within a date range. */
-  sumCredits(accountId: string, range?: DateRange): Promise<Amount>;
+  sumCredits(accountId: AccountId, range?: DateRange): Promise<Amount>;
   /** Sum of debit amounts for an account, optionally within a date range. */
-  sumDebits(accountId: string, range?: DateRange): Promise<Amount>;
+  sumDebits(accountId: AccountId, range?: DateRange): Promise<Amount>;
 
   /**
    * Credit and debit totals for every account (optionally filtered by account
@@ -217,7 +218,7 @@ export interface Repository {
   ): Promise<Amount>;
 
   /** All amounts (credit + debit) for an account, with their entries. */
-  amountsForAccount(accountId: string): Promise<AmountRecord[]>;
+  amountsForAccount(accountId: AccountId): Promise<AmountRecord[]>;
   /** All entries referencing an account (via credit or debit amounts). */
-  entriesForAccount(accountId: string): Promise<Entry[]>;
+  entriesForAccount(accountId: AccountId): Promise<Entry[]>;
 }

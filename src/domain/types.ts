@@ -27,6 +27,8 @@ export function normalCreditBalance(type: AccountType): boolean {
   );
 }
 
+import type { ISODate } from "./branded.js";
+
 /** Optional inclusive date range for balance calculations. Strings are "yyyy-mm-dd". */
 export interface DateRange {
   fromDate?: Date | string;
@@ -111,12 +113,12 @@ export function todayInTimeZone(timeZone: string): (at?: Date) => string {
  * validate first via Zod (see `isoDateSchema`), so this throw is the
  * defense-in-depth backstop for direct repository use.
  */
-export function toDateISO(d: Date | string): string {
+export function toDateISO(d: Date | string): ISODate {
   if (typeof d === "string") {
     if (!isValidISODate(d)) {
       throw new RangeError(`Invalid ISO date string: ${d}`);
     }
-    return d;
+    return d as ISODate;
   }
   if (Number.isNaN(d.getTime())) {
     throw new RangeError("Invalid Date");
@@ -124,5 +126,5 @@ export function toDateISO(d: Date | string): string {
   const year = d.getUTCFullYear();
   const month = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return `${year}-${month}-${day}` as ISODate;
 }

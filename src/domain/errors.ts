@@ -1,3 +1,5 @@
+import type { EntryId, IdempotencyKey } from "./branded.js";
+
 /**
  * A single validation issue. `path` follows Zod's convention: an array of
  * property keys / indices locating the offending field within the input.
@@ -72,8 +74,8 @@ export class RepositoryError extends Error {
  */
 export class IdempotencyConflictError extends Error {
   constructor(
-    readonly key: string,
-    readonly existingEntryId: string,
+    readonly key: IdempotencyKey,
+    readonly existingEntryId: EntryId,
   ) {
     super(
       `Idempotency key "${key}" was already used with a different payload (entry ${existingEntryId})`,

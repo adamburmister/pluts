@@ -1,5 +1,12 @@
 import type { Account } from "./account.js";
 import type { Amount } from "./amount.js";
+import type {
+  AmountLineId,
+  EntryId,
+  IdempotencyKey,
+  ISODate,
+} from "./branded.js";
+import { toAmountLineId, toIdempotencyKey } from "./branded.js";
 import {
   type AmountLineDTO,
   type EntryDTO,
@@ -30,9 +37,9 @@ export interface ResolvedAmountLine {
  * {@link idempotencyKey} so the repository can dedup retries atomically.
  */
 export interface EntryPayload {
-  readonly idempotencyKey?: string;
+  readonly idempotencyKey?: IdempotencyKey;
   readonly description: string;
-  readonly date: string;
+  readonly date: ISODate;
   /**
    * True when {@link date} was defaulted to "today" because the caller
    * omitted it. Excludes the resolved date from the idempotency fingerprint
@@ -49,11 +56,11 @@ export interface EntryPayload {
  */
 export class AmountRecord {
   constructor(
-    readonly id: string,
+    readonly id: AmountLineId,
     readonly kind: AmountKind,
     readonly account: Account,
     readonly amount: Amount,
-    readonly entryId: string,
+    readonly entryId: EntryId,
   ) {}
 
   /**
@@ -74,12 +81,12 @@ export class AmountRecord {
  */
 export class Entry {
   constructor(
-    readonly id: string,
+    readonly id: EntryId,
     readonly description: string,
-    readonly date: string,
+    readonly date: ISODate,
     readonly debitAmounts: readonly AmountRecord[],
     readonly creditAmounts: readonly AmountRecord[],
-    readonly postedAt: string,
+    readonly postedAt: ISODate,
     /**
      * Monotonic journal number, assigned at posting time (1, 2, 3, …).
      * Gives entries a citable identity ("JE 142"), makes same-date ordering
@@ -100,8 +107,8 @@ export class Entry {
   }
 }
 
-function newId(): string {
-  return crypto.randomUUID();
+function newId(): AmountLineId {
+  return toAmountLineId(crypto.randomUUID());
 }
 
 /**
@@ -247,7 +254,9 @@ export function buildEntry(
     date,
     debits: resolvedDebits,
     credits: resolvedCredits,
-    ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(idempotencyKey
+      ? { idempotencyKey: toIdempotencyKey(idempotencyKey) }
+      : {}),
     ...(parsed.data.date === undefined ? { dateWasDefaulted: true } : {}),
   };
   return payload;
@@ -293,7 +302,7 @@ export async function computeEntryFingerprint(
 /** Build {@link AmountRecord}s from a payload, assigning fresh ids. */
 export function amountsFromPayload(
   payload: EntryPayload,
-  entryId: string,
+  entryId: EntryId,
 ): { debits: AmountRecord[]; credits: AmountRecord[] } {
   return {
     debits: payload.debits.map(

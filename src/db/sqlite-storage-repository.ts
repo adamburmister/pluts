@@ -5,6 +5,15 @@ import type {
 import { Account, accountNameKey } from "../domain/account.js";
 import { Amount } from "../domain/amount.js";
 import {
+  type AccountId,
+  type EntryId,
+  type IdempotencyKey,
+  type ISODate,
+  toAccountId,
+  toAmountLineId,
+  toEntryId,
+} from "../domain/branded.js";
+import {
   type AmountKind,
   AmountRecord,
   amountsFromPayload,
@@ -135,11 +144,11 @@ export function isUniqueConstraintError(e: unknown): boolean {
 
 function toAccount(row: AccountRow): Account {
   return new Account(
-    row.id,
+    toAccountId(row.id),
     row.name,
     row.type as AccountType,
     !!row.contra,
-    row.created_at,
+    row.created_at as ISODate,
   );
 }
 
@@ -203,8 +212,8 @@ export class SqlStorageRepository implements Repository {
     type: AccountType;
     contra: boolean;
   }): Promise<Account> {
-    const id = uuid();
-    const now = new Date().toISOString();
+    const id = toAccountId(uuid());
+    const now = new Date().toISOString() as ISODate;
     try {
       this.sql
         .exec(
@@ -228,7 +237,7 @@ export class SqlStorageRepository implements Repository {
     return new Account(id, input.name, input.type, input.contra, now);
   }
 
-  async getAccount(id: string): Promise<Account | null> {
+  async getAccount(id: AccountId): Promise<Account | null> {
     const rows = this.sql
       .exec<AccountRow>(
         "SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE id = ?",
@@ -275,8 +284,8 @@ export class SqlStorageRepository implements Repository {
     // constructible, so a hand-built unbalanced payload must be rejected
     // before any row is written.
     assertBalanced(payload);
-    const id = uuid();
-    const now = new Date().toISOString();
+    const id = toEntryId(uuid());
+    const now = new Date().toISOString() as ISODate;
     const { debits, credits } = amountsFromPayload(payload, id);
     const payloadHash = payload.idempotencyKey
       ? await computeEntryFingerprint(payload)
@@ -380,7 +389,7 @@ export class SqlStorageRepository implements Repository {
     return { count: row.count, maxSeq: row.maxSeq };
   }
 
-  async getEntry(id: string): Promise<Entry | null> {
+  async getEntry(id: EntryId): Promise<Entry | null> {
     const rows = this.sql
       .exec<EntryRow>(
         "SELECT id, description, date, posted_at, seq FROM pluts_entries WHERE id = ?",
@@ -392,8 +401,8 @@ export class SqlStorageRepository implements Repository {
   }
 
   async getEntryKeyRecord(
-    key: string,
-  ): Promise<{ entryId: string; payloadHash: string } | null> {
+    key: IdempotencyKey,
+  ): Promise<{ entryId: EntryId; payloadHash: string } | null> {
     const rows = this.sql
       .exec<{
         [key: string]: SqlStorageValue;
@@ -406,11 +415,11 @@ export class SqlStorageRepository implements Repository {
       .toArray();
     const row = rows[0];
     return row
-      ? { entryId: row.entry_id, payloadHash: row.payload_hash }
+      ? { entryId: toEntryId(row.entry_id), payloadHash: row.payload_hash }
       : null;
   }
 
-  async getEntryByKey(key: string): Promise<Entry | null> {
+  async getEntryByKey(key: IdempotencyKey): Promise<Entry | null> {
     const rows = this.sql
       .exec<EntryRow>(
         `SELECT e.id, e.description, e.date, e.posted_at, e.seq
@@ -477,11 +486,11 @@ export class SqlStorageRepository implements Repository {
     return this.loadEntries(rows);
   }
 
-  async sumCredits(accountId: string, range?: DateRange): Promise<Amount> {
+  async sumCredits(accountId: AccountId, range?: DateRange): Promise<Amount> {
     return this.sumAmounts(accountId, "credit", range);
   }
 
-  async sumDebits(accountId: string, range?: DateRange): Promise<Amount> {
+  async sumDebits(accountId: AccountId, range?: DateRange): Promise<Amount> {
     return this.sumAmounts(accountId, "debit", range);
   }
 
@@ -507,7 +516,7 @@ export class SqlStorageRepository implements Repository {
     return Amount.fromMinor(fromStorageInt(row.total ?? 0, "sumByType"));
   }
 
-  async amountsForAccount(accountId: string): Promise<AmountRecord[]> {
+  async amountsForAccount(accountId: AccountId): Promise<AmountRecord[]> {
     const rows = this.sql
       .exec<AmountRow>(
         `SELECT a.id, a.type, a.account_id, a.entry_id, a.amount
@@ -521,7 +530,7 @@ export class SqlStorageRepository implements Repository {
     return this.hydrateAmounts(rows);
   }
 
-  async entriesForAccount(accountId: string): Promise<Entry[]> {
+  async entriesForAccount(accountId: AccountId): Promise<Entry[]> {
     const rows = this.sql
       .exec<EntryRow>(
         `SELECT DISTINCT e.id, e.description, e.date, e.posted_at, e.seq
@@ -652,12 +661,12 @@ export class SqlStorageRepository implements Repository {
     return rows.map((row) => {
       const records = byEntry.get(row.id) ?? [];
       return new Entry(
-        row.id,
+        toEntryId(row.id),
         row.description,
-        row.date,
+        row.date as ISODate,
         records.filter((r) => r.kind === "debit"),
         records.filter((r) => r.kind === "credit"),
-        row.posted_at,
+        row.posted_at as ISODate,
         row.seq,
       );
     });
@@ -685,11 +694,11 @@ export class SqlStorageRepository implements Repository {
       if (!account)
         throw new Error(`Missing account ${r.account_id} for amount ${r.id}`);
       return new AmountRecord(
-        r.id,
+        toAmountLineId(r.id),
         r.type as AmountKind,
         account,
         Amount.fromMinor(fromStorageInt(r.amount, `amount ${r.id}`)),
-        r.entry_id,
+        toEntryId(r.entry_id),
       );
     });
   }

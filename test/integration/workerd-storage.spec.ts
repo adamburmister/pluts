@@ -8,9 +8,13 @@ import { describe, expect, it } from "vitest";
 import { getLedgerMeta, migrate, SCHEMA_VERSION } from "../../src/db/schema";
 import { SqlStorageRepository } from "../../src/db/sqlite-storage-repository";
 import { Amount, SCALE } from "../../src/domain/amount";
+import type { ISODate } from "../../src/domain/branded";
+import { toIdempotencyKey } from "../../src/domain/branded";
 import { RepositoryError, ValidationError } from "../../src/domain/errors";
 import { Ledger, type TrialBalanceReport } from "../../src/domain/ledger";
 import { AccountType } from "../../src/domain/types";
+
+const iso = (s: string): ISODate => s as ISODate;
 
 /**
  * Integration suite against REAL Durable Object SQLite storage (workerd).
@@ -98,9 +102,9 @@ describe("append-only and validity triggers on real DO SQLite", () => {
         type: AccountType.Revenue,
       });
       await ledger.postEntry({
-        idempotencyKey: "seed-1",
+        idempotencyKey: toIdempotencyKey("seed-1"),
         description: "Sale",
-        date: "2026-01-05",
+        date: iso("2026-01-05"),
         debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
         credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
       });
@@ -243,9 +247,9 @@ describe("Ledger over the production repository on real DO SQLite", () => {
       });
 
       const input = {
-        idempotencyKey: "req-1",
+        idempotencyKey: toIdempotencyKey("req-1"),
         description: "Sale",
-        date: "2026-01-05",
+        date: iso("2026-01-05"),
         debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
         credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
       };
@@ -268,7 +272,7 @@ describe("Ledger over the production repository on real DO SQLite", () => {
 
       const second = await ledger.postEntry({
         description: "Sale 2",
-        date: "2026-01-06",
+        date: iso("2026-01-06"),
         debits: [{ accountName: "Cash", amount: Amount.fromMajor(50) }],
         credits: [{ accountName: "Revenue", amount: Amount.fromMajor(50) }],
       });
@@ -298,7 +302,7 @@ describe("Ledger over the production repository on real DO SQLite", () => {
       await expect(
         repo.insertEntry({
           description: "unbalanced",
-          date: "2026-01-05",
+          date: iso("2026-01-05"),
           debits: [{ account: cash, amount: Amount.fromMajor(10) }],
           credits: [{ account: rev, amount: Amount.fromMajor(1) }],
         }),
@@ -311,17 +315,17 @@ describe("Ledger over the production repository on real DO SQLite", () => {
       // transaction, then the key INSERT hits the unique constraint — the
       // whole posting must roll back, leaving only the original rows.
       const original = await repo.insertEntry({
-        idempotencyKey: "atomic-key",
+        idempotencyKey: toIdempotencyKey("atomic-key"),
         description: "original",
-        date: "2026-01-05",
+        date: iso("2026-01-05"),
         debits: [{ account: cash, amount: Amount.fromMajor(10) }],
         credits: [{ account: rev, amount: Amount.fromMajor(10) }],
       });
       await expect(
         repo.insertEntry({
-          idempotencyKey: "atomic-key",
+          idempotencyKey: toIdempotencyKey("atomic-key"),
           description: "collides inside the transaction",
-          date: "2026-01-06",
+          date: iso("2026-01-06"),
           debits: [{ account: cash, amount: Amount.fromMajor(99) }],
           credits: [{ account: rev, amount: Amount.fromMajor(99) }],
         }),
@@ -379,7 +383,7 @@ describe("reports stay snapshot-consistent under concurrent writes", () => {
         pending.push(
           ledger.postEntry({
             description: `Sale ${i}`,
-            date: "2026-01-05",
+            date: iso("2026-01-05"),
             debits: [{ accountName: "Cash", amount: Amount.fromMajor(10) }],
             credits: [{ accountName: "Revenue", amount: Amount.fromMajor(10) }],
           }),
@@ -389,7 +393,7 @@ describe("reports stay snapshot-consistent under concurrent writes", () => {
         pending.push(
           ledger.postEntry({
             description: `Spend ${i}`,
-            date: "2026-01-05",
+            date: iso("2026-01-05"),
             debits: [{ accountName: "Expense", amount: Amount.fromMajor(4) }],
             credits: [{ accountName: "Cash", amount: Amount.fromMajor(4) }],
           }),
