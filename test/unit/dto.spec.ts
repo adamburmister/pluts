@@ -133,6 +133,13 @@ describe("DTO serialization", () => {
     expect(dto.balance).toBeUndefined();
   });
 
+  it("AccountDTO includes the optional balance when provided", () => {
+    const account = acct("Cash");
+    const balance = Amount.fromMajor("100.00");
+    const dto = toAccountDTO(account, balance);
+    expect(dto.balance).toBe("100.00");
+  });
+
   // F-16: one concept, one wire shape. AmountRecord.toJSON used to emit
   // { accountId } while Entry.toJSON spread the same records into
   // { account: {...} } — two different serializations of the same line.
