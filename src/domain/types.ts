@@ -55,6 +55,50 @@ export function isValidISODate(s: string): boolean {
 }
 
 /**
+ * The library's default "today": the **UTC** calendar day.
+ *
+ * Every date in Pluts is a bare `yyyy-mm-dd` calendar date with no attached
+ * offset, so "today" is only well-defined relative to a chosen zone, and the
+ * chosen zone here is UTC. For any zone east of UTC (AUD/NZD, UTC+8..+13)
+ * an entry posted before local noon defaults to *yesterday* — which at a
+ * month boundary silently moves it into the previous reporting period.
+ *
+ * Consumers that need a local calendar day should pass
+ * {@link todayInTimeZone} as the `Ledger`'s `today` option, or supply an
+ * explicit `date` on every entry.
+ */
+export function utcToday(at: Date = new Date()): string {
+  return toDateISO(at);
+}
+
+/**
+ * Builds a "today" function for an IANA time zone, for use as the `Ledger`
+ * `today` option: `new Ledger(repo, { today: todayInTimeZone("Pacific/Auckland") })`.
+ *
+ * Throws `RangeError` immediately for an unknown zone, so a typo fails at
+ * construction rather than silently defaulting dates to UTC at posting time.
+ */
+export function todayInTimeZone(timeZone: string): (at?: Date) => string {
+  // `en-CA` formats as yyyy-mm-dd, zero-padded, which is exactly our shape.
+  // Constructing eagerly is what surfaces an invalid zone as a RangeError.
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return (at: Date = new Date()) => {
+    const formatted = formatter.format(at);
+    if (!isValidISODate(formatted)) {
+      throw new RangeError(
+        `Time zone ${timeZone} produced a non-ISO date: ${formatted}`,
+      );
+    }
+    return formatted;
+  };
+}
+
+/**
  * Normalizes a Date | string to an ISO yyyy-mm-dd string.
  * Throws RangeError on malformed strings or invalid Dates; public API paths
  * validate first via Zod (see `isoDateSchema`), so this throw is the

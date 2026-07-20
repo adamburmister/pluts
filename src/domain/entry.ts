@@ -13,7 +13,7 @@ import {
   entryInputSchema,
   toIssues,
 } from "./schemas.js";
-import { toDateISO } from "./types.js";
+import { toDateISO, utcToday } from "./types.js";
 
 export type AmountKind = "credit" | "debit";
 
@@ -182,19 +182,29 @@ export function assertBalanced(payload: EntryPayload): void {
  *   aren't schema concerns); unresolved accounts are reported as issues
  *   with path `[root, index, 'account']`
  *
+ * Date policy: an omitted `date` defaults to `today()`, which is the **UTC**
+ * calendar day unless the caller supplies another source (see
+ * {@link utcToday} and `todayInTimeZone`). East of UTC that means an entry
+ * posted before local noon lands on yesterday's date — pass an explicit
+ * `date` (or a zone-aware `today`) wherever period boundaries matter.
+ *
  * @param resolveAccount looks up an account by name; returns null if missing
+ * @param today supplies the default `yyyy-mm-dd` when `input.date` is omitted
  */
 export function buildEntry(
   input: EntryInput,
   resolveAccount: (name: string) => Account | null = () => null,
-  now: () => Date = () => new Date(),
+  today: () => string = utcToday,
 ): EntryPayload {
   const parsed = entryInputSchema.safeParse(input);
   if (!parsed.success) {
     throw new ValidationError(toIssues(parsed.error.issues));
   }
   const { description, debits, credits } = parsed.data;
-  const date = parsed.data.date ?? toDateISO(now());
+  // A caller-supplied `today` is outside the schema's reach, so re-validate
+  // its shape here: dates are compared lexicographically in range queries and
+  // a malformed one would silently mis-file the entry (see toDateISO).
+  const date = parsed.data.date ?? toDateISO(today());
   const { idempotencyKey } = parsed.data;
 
   // Resolve accounts by name (post-parse). Unresolved names become issues.

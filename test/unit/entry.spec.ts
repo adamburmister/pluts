@@ -4,7 +4,7 @@ import { Amount } from "../../src/domain/amount";
 import { buildEntry, computeEntryFingerprint } from "../../src/domain/entry";
 import { ValidationError, type ValidationIssue } from "../../src/domain/errors";
 import type { EntryInput } from "../../src/domain/schemas";
-import { AccountType } from "../../src/domain/types";
+import { AccountType, utcToday } from "../../src/domain/types";
 
 function acct(name: string, type = AccountType.Asset): Account {
   return new Account(`id-${name}`, name, type, false, "");
@@ -170,11 +170,10 @@ describe("buildEntry", () => {
   });
 
   it("defaults the date to today when omitted", () => {
-    const fixed = new Date("2026-07-06T00:00:00Z");
     const payload = buildEntry(
       baseInput(),
       () => null,
-      () => fixed,
+      () => utcToday(new Date("2026-07-06T00:00:00Z")),
     );
     expect(payload.date).toBe("2026-07-06");
   });
@@ -307,12 +306,12 @@ describe("computeEntryFingerprint", () => {
     const day1 = buildEntry(
       input,
       () => null,
-      () => new Date("2026-07-05T23:59:59Z"),
+      () => utcToday(new Date("2026-07-05T23:59:59Z")),
     );
     const day2 = buildEntry(
       input,
       () => null,
-      () => new Date("2026-07-06T00:00:01Z"),
+      () => utcToday(new Date("2026-07-06T00:00:01Z")),
     );
     expect(day1.date).toBe("2026-07-05");
     expect(day2.date).toBe("2026-07-06");

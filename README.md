@@ -229,6 +229,38 @@ await ledger.accountBalance(cash, {
 });
 ```
 
+### Dates and time zones
+
+Every date in Pluts is a bare `yyyy-mm-dd` calendar date with **no attached
+offset or time**. Two rules follow from that, and both are load-bearing for
+period reporting:
+
+1. **An omitted entry `date` defaults to the UTC calendar day.**
+2. **A `Date` you pass is converted using its UTC fields**, not the host's
+   local zone. `new Date("2026-07-20T08:00")` in Auckland is `2026-07-19`.
+
+For any zone east of UTC — AUD/NZD at UTC+8..+13 — an entry posted before
+local noon therefore defaults to *yesterday*. On the 1st of the month that
+silently files it into the previous reporting period.
+
+To get a local calendar day, construct the ledger with a `today` option:
+
+```ts
+import { Ledger, todayInTimeZone } from "pluts";
+
+const ledger = new Ledger(repo, { today: todayInTimeZone("Pacific/Auckland") });
+await ledger.postEntry({ description: "Sale", debits, credits }); // NZ-local date
+```
+
+`today` is any `() => string` returning a `yyyy-mm-dd` date; `todayInTimeZone`
+throws `RangeError` at construction for an unknown IANA zone, and `utcToday`
+(the default) is exported for tests and explicit opt-in. A malformed return
+value is rejected rather than stored, since dates are compared
+lexicographically in range queries.
+
+Where period accuracy matters, the most robust option remains passing an
+explicit `date` on every entry.
+
 ## Validation
 
 `Ledger.postEntry` and `Ledger.createAccount` throw `ValidationError` with a flat list of path-tagged `issues` on failure:
@@ -253,7 +285,7 @@ Rules (enforced via Zod schema + `superRefine`):
 - at least one debit and one credit
 - every amount requires an account and a strictly positive value (a $0.00 leg attaches an account to an entry that didn't touch it)
 - sum(debits) === sum(credits) (exact)
-- `date` defaults to today if omitted
+- `date` defaults to today if omitted — **today in UTC**, see [Dates and time zones](#dates-and-time-zones)
 - account names must resolve to existing accounts
 
 Zod validates these inputs internally, but **the zod schemas are not part of the
