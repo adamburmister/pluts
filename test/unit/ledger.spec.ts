@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { Account } from "../../src/domain/account";
 import { Amount, formatAmount } from "../../src/domain/amount";
+import type { ISODate } from "../../src/domain/branded";
+import { toAccountId } from "../../src/domain/branded";
 import { ValidationError } from "../../src/domain/errors";
 import { Ledger } from "../../src/domain/ledger";
 import { AccountType } from "../../src/domain/types";
 import { InMemoryRepository } from "../helpers/in-memory-repository";
+
+const iso = (s: string): ISODate => s as ISODate;
 
 describe("Ledger (in-memory)", () => {
   let ledger: Ledger;
@@ -140,11 +144,11 @@ describe("Ledger (in-memory)", () => {
         type: AccountType.Revenue,
       });
       const ghost = new Account(
-        "no-such-id",
+        toAccountId("no-such-id"),
         "Ghost",
         AccountType.Asset,
         false,
-        "2026-01-01",
+        iso("2026-01-01"),
       );
 
       const error = await ledger
@@ -167,18 +171,18 @@ describe("Ledger (in-memory)", () => {
 
     it("reports every unknown account object, on either side", async () => {
       const ghostDebit = new Account(
-        "ghost-debit",
+        toAccountId("ghost-debit"),
         "Ghost",
         AccountType.Asset,
         false,
-        "2026-01-01",
+        iso("2026-01-01"),
       );
       const ghostCredit = new Account(
-        "ghost-credit",
+        toAccountId("ghost-credit"),
         "Phantom",
         AccountType.Revenue,
         false,
-        "2026-01-01",
+        iso("2026-01-01"),
       );
 
       const error = await ledger

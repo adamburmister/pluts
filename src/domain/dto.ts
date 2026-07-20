@@ -1,4 +1,5 @@
 import type { Account } from "./account.js";
+import type { AccountId, AmountLineId, EntryId, ISODate } from "./branded.js";
 import type { AmountRecord, Entry } from "./entry.js";
 import type { AccountType } from "./types.js";
 
@@ -15,33 +16,33 @@ import type { AccountType } from "./types.js";
  */
 
 export interface AccountDTO {
-  id: string;
+  id: AccountId;
   name: string;
   type: AccountType;
   contra: boolean;
-  createdAt: string;
+  createdAt: ISODate;
   /** Optional pre-computed balance, formatted in major units. */
   balance?: string;
 }
 
 export interface AmountLineDTO {
-  id: string;
+  id: AmountLineId;
   kind: "debit" | "credit";
   account: AccountDTO;
   /** Major-units decimal string, e.g. "10.00". */
   amount: string;
-  entryId: string;
+  entryId: EntryId;
 }
 
 export interface EntryDTO {
-  id: string;
+  id: EntryId;
   description: string;
-  date: string;
+  date: ISODate;
   /** Monotonic journal number; null for entries built outside a repository. */
   seq: number | null;
   debitAmounts: AmountLineDTO[];
   creditAmounts: AmountLineDTO[];
-  postedAt: string;
+  postedAt: ISODate;
 }
 
 function freeze<T>(value: T): T {

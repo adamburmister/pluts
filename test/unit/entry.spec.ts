@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { Account } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
+import type { ISODate } from "../../src/domain/branded";
+import { toAccountId } from "../../src/domain/branded";
 import { buildEntry, computeEntryFingerprint } from "../../src/domain/entry";
 import { ValidationError, type ValidationIssue } from "../../src/domain/errors";
 import type { EntryInput } from "../../src/domain/schemas";
 import { AccountType, utcToday } from "../../src/domain/types";
 
+const iso = (s: string): ISODate => s as ISODate;
+
 function acct(name: string, type = AccountType.Asset): Account {
-  return new Account(`id-${name}`, name, type, false, "");
+  return new Account(toAccountId(`id-${name}`), name, type, false, iso(""));
 }
 
 function baseInput(overrides: Partial<EntryInput> = {}): EntryInput {

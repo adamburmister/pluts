@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Account } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
+import type { ISODate } from "../../src/domain/branded";
+import {
+  toAccountId,
+  toAmountLineId,
+  toEntryId,
+} from "../../src/domain/branded";
 import {
   toAccountDTO,
   toAmountLineDTO,
@@ -9,8 +15,16 @@ import {
 import { AmountRecord, Entry } from "../../src/domain/entry";
 import { AccountType } from "../../src/domain/types";
 
+const iso = (s: string): ISODate => s as ISODate;
+
 function acct(name: string, type = AccountType.Asset): Account {
-  return new Account(`id-${name}`, name, type, false, "2026-01-01");
+  return new Account(
+    toAccountId(`id-${name}`),
+    name,
+    type,
+    false,
+    iso("2026-01-01"),
+  );
 }
 
 /** Build an Entry whose lines carry real Amount instances (the RPC bug case). */
@@ -18,28 +32,28 @@ function entry(): Entry {
   const cash = acct("Cash", AccountType.Asset);
   const revenue = acct("Revenue", AccountType.Revenue);
   return new Entry(
-    "entry-1",
+    toEntryId("entry-1"),
     "Sold some widgets",
-    "2026-07-01",
+    iso("2026-07-01"),
     [
       new AmountRecord(
-        "aline-1",
+        toAmountLineId("aline-1"),
         "debit",
         cash,
         Amount.fromMajor("100.00"),
-        "entry-1",
+        toEntryId("entry-1"),
       ),
     ],
     [
       new AmountRecord(
-        "aline-2",
+        toAmountLineId("aline-2"),
         "credit",
         revenue,
         Amount.fromMajor("100.00"),
-        "entry-1",
+        toEntryId("entry-1"),
       ),
     ],
-    "2026-07-01T10:00:00.000Z",
+    iso("2026-07-01T10:00:00.000Z"),
   );
 }
 
@@ -61,11 +75,11 @@ describe("DTO serialization", () => {
 
   it("JSON.stringify of structuredClone(toAmountLineDTO) does not throw", () => {
     const line = new AmountRecord(
-      "aline-1",
+      toAmountLineId("aline-1"),
       "debit",
       acct("Cash"),
       Amount.fromMajor("100.00"),
-      "entry-1",
+      toEntryId("entry-1"),
     );
     expect(() =>
       JSON.stringify(structuredClone(toAmountLineDTO(line))),
@@ -104,11 +118,11 @@ describe("DTO serialization", () => {
     ];
     for (const [input, expected] of cases) {
       const line = new AmountRecord(
-        "l",
+        toAmountLineId("l"),
         "debit",
         acct("Cash"),
         Amount.fromMajor(input),
-        "e",
+        toEntryId("e"),
       );
       expect(toAmountLineDTO(line).amount).toBe(expected);
     }
@@ -125,11 +139,11 @@ describe("DTO serialization", () => {
   // Both now delegate to the DTO mappers.
   it("JSON of an AmountRecord matches its DTO shape", () => {
     const line = new AmountRecord(
-      "aline-1",
+      toAmountLineId("aline-1"),
       "debit",
       acct("Cash"),
       Amount.fromMajor("100.00"),
-      "entry-1",
+      toEntryId("entry-1"),
     );
     expect(JSON.parse(JSON.stringify(line))).toEqual(
       JSON.parse(JSON.stringify(toAmountLineDTO(line))),

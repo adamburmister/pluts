@@ -27,6 +27,17 @@ export {
 } from "./domain/account.js";
 export { Amount, formatAmount, SCALE } from "./domain/amount.js";
 export {
+  type AccountId,
+  type AmountLineId,
+  type EntryId,
+  type IdempotencyKey,
+  type ISODate,
+  toAccountId,
+  toAmountLineId,
+  toEntryId,
+  toIdempotencyKey,
+} from "./domain/branded.js";
+export {
   type AccountDTO,
   type AmountLineDTO,
   type EntryDTO,

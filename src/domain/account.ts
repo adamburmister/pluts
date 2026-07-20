@@ -1,4 +1,5 @@
 import type { Amount } from "./amount.js";
+import type { AccountId, ISODate } from "./branded.js";
 import { type AccountType, normalCreditBalance } from "./types.js";
 
 /**
@@ -9,14 +10,20 @@ export function accountNameKey(name: string): string {
   return name.trim().toLowerCase();
 }
 
-/** A persisted account record. The `type` discriminates the accounting behaviour. */
+/**
+ * A persisted account record. The `type` discriminates the accounting
+ * behaviour. `id` is an {@link AccountId} and `createdAt` an {@link ISODate} —
+ * both branded so an account id cannot be passed where a date (or any other
+ * identifier) is expected. Construct one only from a repository; the brand is
+ * the repository's say-so that this id came from the ledger.
+ */
 export class Account {
   constructor(
-    readonly id: string,
+    readonly id: AccountId,
     readonly name: string,
     readonly type: AccountType,
     readonly contra: boolean,
-    readonly createdAt: string,
+    readonly createdAt: ISODate,
   ) {}
 }
 

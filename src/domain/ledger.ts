@@ -10,6 +10,7 @@ import {
   aggregateBalances,
   computeBalance,
 } from "./account.js";
+import type { AccountId } from "./branded.js";
 import {
   type AmountRecord,
   buildEntry,
@@ -216,9 +217,9 @@ export class Ledger {
    */
   private async prefetchAccounts(
     input: EntryInput,
-  ): Promise<{ byName: Map<string, Account>; knownIds: Set<string> }> {
+  ): Promise<{ byName: Map<string, Account>; knownIds: Set<AccountId> }> {
     const names = new Set<string>();
-    const ids = new Set<string>();
+    const ids = new Set<AccountId>();
     const lines = [
       ...(Array.isArray(input.debits) ? input.debits : []),
       ...(Array.isArray(input.credits) ? input.credits : []),
@@ -240,7 +241,7 @@ export class Ledger {
 
     // A name that resolved names an account that exists by definition; only
     // the caller-supplied ids still need confirming.
-    const knownIds = new Set<string>(
+    const knownIds = new Set<AccountId>(
       [...byName.values()].map((account) => account.id),
     );
     for (const id of ids) {
@@ -266,7 +267,7 @@ export class Ledger {
    */
   private assertAccountsExist(
     payload: EntryPayload,
-    knownIds: ReadonlySet<string>,
+    knownIds: ReadonlySet<AccountId>,
   ): void {
     const issues: ValidationIssue[] = [];
     const check = (
@@ -325,7 +326,7 @@ export class Ledger {
     return this.repo.insertEntry(payload);
   }
 
-  async getAccount(id: string): Promise<Account | null> {
+  async getAccount(id: AccountId): Promise<Account | null> {
     return this.repo.getAccount(id);
   }
 

@@ -8,6 +8,13 @@ import {
 } from "../../src/db/repository";
 import { Account, accountNameKey } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
+import type {
+  AccountId,
+  EntryId,
+  IdempotencyKey,
+  ISODate,
+} from "../../src/domain/branded";
+import { toAccountId, toEntryId } from "../../src/domain/branded";
 import {
   type AmountRecord,
   amountsFromPayload,
@@ -79,8 +86,8 @@ export class InMemoryRepository implements Repository {
         "Account already exists",
       );
     }
-    const id = uuid();
-    const now = new Date().toISOString();
+    const id = toAccountId(uuid());
+    const now = new Date().toISOString() as ISODate;
     const rec: MemAccount = {
       id,
       name: input.name,
@@ -96,10 +103,16 @@ export class InMemoryRepository implements Repository {
   }
 
   private toAccount(rec: MemAccount): Account {
-    return new Account(rec.id, rec.name, rec.type, rec.contra, rec.createdAt);
+    return new Account(
+      toAccountId(rec.id),
+      rec.name,
+      rec.type,
+      rec.contra,
+      rec.createdAt as ISODate,
+    );
   }
 
-  async getAccount(id: string): Promise<Account | null> {
+  async getAccount(id: AccountId): Promise<Account | null> {
     const rec = this.accounts.get(id);
     return rec ? this.toAccount(rec) : null;
   }
@@ -134,7 +147,7 @@ export class InMemoryRepository implements Repository {
         if (existing.payloadHash && existing.payloadHash !== payloadHash) {
           throw new IdempotencyConflictError(
             payload.idempotencyKey,
-            existing.entryId,
+            toEntryId(existing.entryId),
           );
         }
         const mem = this.entries.get(existing.entryId);
@@ -142,8 +155,8 @@ export class InMemoryRepository implements Repository {
       }
     }
 
-    const id = uuid();
-    const now = new Date().toISOString();
+    const id = toEntryId(uuid());
+    const now = new Date().toISOString() as ISODate;
     const { debits, credits } = amountsFromPayload(payload, id);
 
     for (const a of debits) {
@@ -175,17 +188,20 @@ export class InMemoryRepository implements Repository {
   }
 
   async getEntryKeyRecord(
-    key: string,
-  ): Promise<{ entryId: string; payloadHash: string } | null> {
-    return this.keyToEntry.get(key) ?? null;
+    key: IdempotencyKey,
+  ): Promise<{ entryId: EntryId; payloadHash: string } | null> {
+    const rec = this.keyToEntry.get(key);
+    return rec
+      ? { entryId: toEntryId(rec.entryId), payloadHash: rec.payloadHash }
+      : null;
   }
 
-  async getEntry(id: string): Promise<Entry | null> {
+  async getEntry(id: EntryId): Promise<Entry | null> {
     const mem = this.entries.get(id);
     return mem ? this.toEntry(mem) : null;
   }
 
-  async getEntryByKey(key: string): Promise<Entry | null> {
+  async getEntryByKey(key: IdempotencyKey): Promise<Entry | null> {
     const rec = this.keyToEntry.get(key);
     if (!rec) return null;
     const mem = this.entries.get(rec.entryId);
@@ -260,13 +276,13 @@ export class InMemoryRepository implements Repository {
     return { count: this.entries.size, maxSeq };
   }
 
-  async sumCredits(accountId: string, range?: DateRange): Promise<Amount> {
+  async sumCredits(accountId: AccountId, range?: DateRange): Promise<Amount> {
     const rec = this.accounts.get(accountId);
     if (!rec) return Amount.zero();
     return this.sum(rec.credits, range);
   }
 
-  async sumDebits(accountId: string, range?: DateRange): Promise<Amount> {
+  async sumDebits(accountId: AccountId, range?: DateRange): Promise<Amount> {
     const rec = this.accounts.get(accountId);
     if (!rec) return Amount.zero();
     return this.sum(rec.debits, range);
@@ -286,7 +302,7 @@ export class InMemoryRepository implements Repository {
     return Amount.fromMinor(total);
   }
 
-  async amountsForAccount(accountId: string): Promise<AmountRecord[]> {
+  async amountsForAccount(accountId: AccountId): Promise<AmountRecord[]> {
     // Statement view: amounts in the owning entry's journal order
     // (date, seq), matching the SQL repository.
     const mems = [...this.entries.values()]
@@ -304,7 +320,7 @@ export class InMemoryRepository implements Repository {
     return out;
   }
 
-  async entriesForAccount(accountId: string): Promise<Entry[]> {
+  async entriesForAccount(accountId: AccountId): Promise<Entry[]> {
     const ids = new Set<string>();
     const rec = this.accounts.get(accountId);
     if (rec) {
@@ -335,12 +351,12 @@ export class InMemoryRepository implements Repository {
     // Copy the line arrays: returned Entry objects must not alias internal
     // state (the SQL repository re-hydrates per query; the double must match).
     return new Entry(
-      mem.id,
+      toEntryId(mem.id),
       mem.description,
-      mem.date,
+      mem.date as ISODate,
       [...mem.debitAmounts],
       [...mem.creditAmounts],
-      mem.postedAt,
+      mem.postedAt as ISODate,
       mem.seq,
     );
   }

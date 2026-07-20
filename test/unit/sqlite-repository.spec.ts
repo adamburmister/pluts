@@ -4,10 +4,14 @@ import { migrate } from "../../src/db/schema";
 import { SqlStorageRepository } from "../../src/db/sqlite-storage-repository";
 import { Account } from "../../src/domain/account";
 import { Amount, formatAmount } from "../../src/domain/amount";
+import type { ISODate } from "../../src/domain/branded";
+import { toAccountId, toIdempotencyKey } from "../../src/domain/branded";
 import { RepositoryError, ValidationError } from "../../src/domain/errors";
 import { Ledger } from "../../src/domain/ledger";
 import { AccountType } from "../../src/domain/types";
 import { nodeSqlStorage } from "../helpers/node-sql-storage";
+
+const iso = (s: string): ISODate => s as ISODate;
 
 /**
  * F-11: the production SqlStorageRepository — where atomicity, rollback,
@@ -145,7 +149,9 @@ describe("SqlStorageRepository (real SQLite)", () => {
     const retry = await ledger.postEntry({ ...input });
     expect(retry.id).toBe(first.id);
     expect(await ledger.allEntries()).toHaveLength(1);
-    expect((await repo.getEntryByKey("req-1"))?.id).toBe(first.id);
+    expect((await repo.getEntryByKey(toIdempotencyKey("req-1")))?.id).toBe(
+      first.id,
+    );
   });
 
   it("rolls back the whole entry when any row insert fails (atomicity)", async () => {
@@ -157,16 +163,16 @@ describe("SqlStorageRepository (real SQLite)", () => {
     // exist: the entry row and first amount insert succeed, the second
     // amount violates the FK — the transaction must leave nothing behind.
     const ghost = new Account(
-      "no-such-account",
+      toAccountId("no-such-account"),
       "Ghost",
       AccountType.Revenue,
       false,
-      "2026-01-01",
+      iso("2026-01-01"),
     );
     await expect(
       repo.insertEntry({
         description: "doomed",
-        date: "2026-01-01",
+        date: iso("2026-01-01"),
         debits: [{ account: cash, amount: Amount.fromMajor(10) }],
         credits: [{ account: ghost, amount: Amount.fromMajor(10) }],
       }),
