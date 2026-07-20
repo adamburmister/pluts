@@ -1,7 +1,28 @@
 import type { Account } from "../domain/account.js";
 import type { Amount } from "../domain/amount.js";
 import type { AmountRecord, Entry, EntryPayload } from "../domain/entry.js";
+import { RepositoryError } from "../domain/errors.js";
 import type { AccountType, DateRange } from "../domain/types.js";
+
+/**
+ * Guard a paging bound: `undefined` (absent) or a non-negative integer.
+ * Anything else changes the meaning of the query rather than narrowing it —
+ * a negative limit reads as "unbounded" in SQL and drops the last row under
+ * JavaScript `slice`. Shared so every {@link Repository} implementation, the
+ * test double included, rejects the same inputs.
+ */
+export function assertPageBound(
+  value: number | undefined,
+  name: "limit" | "offset",
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RepositoryError(
+      `${name} must be a non-negative integer, got ${value}`,
+    );
+  }
+  return value;
+}
 
 /**
  * An account paired with its credit and debit totals. Produced by
@@ -34,10 +55,10 @@ export interface AccountTotalsOptions {
  * The position is the journal sequence number, not the entry date. `seq` is
  * assigned monotonically at posting time and never changes, so nothing can
  * ever appear *behind* a cursor: a backdated entry posted mid-walk still gets
- * the next sequence number and is visited in turn. A `(date, seq)` cursor
- * cannot promise that — an entry backdated before the cursor's date would be
- * silently skipped by an ascending walk, which is precisely the guarantee an
- * audit walk needs.
+ * the next sequence number and is not slotted in among rows already visited.
+ * A `(date, seq)` cursor cannot promise that — an entry backdated before the
+ * cursor's date would be silently skipped by an ascending walk, which is
+ * precisely the guarantee an audit walk needs.
  */
 export interface EntryCursor {
   /** The entry's journal sequence number. */
@@ -152,12 +173,19 @@ export interface Repository {
 
   /**
    * The journal in **posting order** (`seq`), for walking it completely.
+   * Continue with `after: entryCursor(lastEntryOfThePage)`.
    *
    * Posting order is the only order in which the journal is append-only, so
-   * it is the only one a complete walk can rely on: an entry posted or
-   * backdated mid-walk still takes the next sequence number and is visited in
-   * turn, and nothing can ever appear behind the cursor. Continue with
-   * `after: entryCursor(lastEntryOfThePage)`.
+   * it is the only one a walk can rely on: no entry, however it is dated, can
+   * ever appear behind the cursor, so a walk never repeats or skips a row.
+   *
+   * Direction decides what a mid-walk posting means:
+   * - `"asc"` — an open-ended walk. Entries posted while it runs take higher
+   *   sequence numbers, so they are visited in turn and the walk sees the
+   *   journal *including* everything written during it.
+   * - `"desc"` — a fixed-tail walk. Entries posted while it runs take higher
+   *   sequence numbers, i.e. land behind the starting point, and are not
+   *   visited. The walk covers exactly the journal as of its first page.
    */
   walkEntries(
     order?: "asc" | "desc",

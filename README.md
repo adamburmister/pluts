@@ -218,8 +218,10 @@ await ledger.allEntries("desc", { limit: 50 }); // newest 50
 await ledger.allEntries("desc", { limit: 50, offset: 50 }); // the next screen
 
 // walkEntries traverses posting order instead, and continues from a cursor.
-// That is the only order in which the journal is append-only, so a walk sees
-// every entry exactly once even if entries are posted or backdated mid-walk.
+// That is the only order in which the journal is append-only, so a walk never
+// repeats or skips a row, whatever is posted or backdated while it runs.
+// Ascending is open-ended (mid-walk postings are visited in turn); descending
+// is a fixed tail (it covers the journal as of its first page).
 let cursor: EntryCursor | undefined;
 for (;;) {
   const page = await ledger.walkEntries("asc", {

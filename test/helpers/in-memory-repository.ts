@@ -1,9 +1,10 @@
-import type {
-  AccountTotals,
-  AccountTotalsOptions,
-  EntryPageOptions,
-  EntryWalkOptions,
-  Repository,
+import {
+  type AccountTotals,
+  type AccountTotalsOptions,
+  assertPageBound,
+  type EntryPageOptions,
+  type EntryWalkOptions,
+  type Repository,
 } from "../../src/db/repository";
 import { Account } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
@@ -201,11 +202,15 @@ export class InMemoryRepository implements Repository {
         ? a.date.localeCompare(b.date) || a.seq - b.seq
         : b.date.localeCompare(a.date) || b.seq - a.seq,
     );
-    const offset = page.offset ?? 0;
+    // The same bounds guard the production repository uses: a double that
+    // accepted `limit: -1` would keep a test green for input that throws in
+    // production (JS slice would quietly drop the last entry instead).
+    const limit = assertPageBound(page.limit, "limit");
+    const offset = assertPageBound(page.offset, "offset") ?? 0;
     const windowed =
-      page.limit === undefined
+      limit === undefined
         ? list.slice(offset)
-        : list.slice(offset, offset + page.limit);
+        : list.slice(offset, offset + limit);
     return windowed.map((m) => this.toEntry(m));
   }
 
@@ -214,6 +219,7 @@ export class InMemoryRepository implements Repository {
     page: EntryWalkOptions = {},
   ): Promise<Entry[]> {
     const after = page.after;
+    const limit = assertPageBound(page.limit, "limit");
     // Posting order on every page, cursored or not — see walkEntries in the
     // Repository port for why a walk cannot use the date ordering.
     const list = [...this.entries.values()].sort((a, b) =>
@@ -225,7 +231,7 @@ export class InMemoryRepository implements Repository {
         )
       : list;
     const windowed =
-      page.limit === undefined ? remaining : remaining.slice(0, page.limit);
+      limit === undefined ? remaining : remaining.slice(0, limit);
     return windowed.map((m) => this.toEntry(m));
   }
 

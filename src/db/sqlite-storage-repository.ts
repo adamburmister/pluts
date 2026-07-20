@@ -23,12 +23,13 @@ import {
   type DateRange,
   toDateISO,
 } from "../domain/types.js";
-import type {
-  AccountTotals,
-  AccountTotalsOptions,
-  EntryPageOptions,
-  EntryWalkOptions,
-  Repository,
+import {
+  type AccountTotals,
+  type AccountTotalsOptions,
+  assertPageBound,
+  type EntryPageOptions,
+  type EntryWalkOptions,
+  type Repository,
 } from "./repository.js";
 
 /**
@@ -38,24 +39,6 @@ import type {
  * one consistent view of the database.
  */
 const MAX_IN_CLAUSE_IDS = 100;
-
-/**
- * Guard a paging bound: `undefined` (absent) or a non-negative integer.
- * Anything else — a negative limit above all — would change the meaning of
- * the query rather than narrow it.
- */
-function assertPageBound(
-  value: number | undefined,
-  name: "limit" | "offset",
-): number | undefined {
-  if (value === undefined) return undefined;
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new RepositoryError(
-      `allEntries ${name} must be a non-negative integer, got ${value}`,
-    );
-  }
-  return value;
-}
 
 function chunk<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];

@@ -192,6 +192,18 @@ describe("report queries (real SQLite)", () => {
     await expect(repo.walkEntries("asc", { limit: -1 })).rejects.toBeInstanceOf(
       RepositoryError,
     );
+    // The in-memory double shares that guard, or a repository-level test
+    // would pass on bounds production rejects (JS slice takes them happily).
+    const fake = new InMemoryRepository();
+    await expect(fake.allEntries("desc", { limit: -1 })).rejects.toBeInstanceOf(
+      RepositoryError,
+    );
+    await expect(
+      fake.allEntries("desc", { offset: -5 }),
+    ).rejects.toBeInstanceOf(RepositoryError);
+    await expect(
+      fake.walkEntries("asc", { limit: 1.5 }),
+    ).rejects.toBeInstanceOf(RepositoryError);
   });
 
   it("builds an income statement without reading unrelated account types", async () => {
@@ -266,6 +278,67 @@ describe("report queries (real SQLite)", () => {
     const journal = await ledger.allEntries("asc");
     expect([...seen].sort()).toEqual(journal.map((e) => e.description).sort());
     expect(seen).toContain("Backdated 2");
+  });
+
+  it("walks ascending open-endedly and descending as a fixed tail", async () => {
+    // Direction decides what a mid-walk posting means. Ascending: the new
+    // entry takes a higher seq, ahead of the cursor, so the walk picks it up.
+    const ascending: string[] = [];
+    let cursor: EntryCursor | undefined;
+    let posted = false;
+    for (;;) {
+      const page = await ledger.walkEntries("asc", {
+        limit: 1,
+        ...(cursor ? { after: cursor } : {}),
+      });
+      const last = page.at(-1);
+      if (!last) break;
+      ascending.push(last.description);
+      cursor = entryCursor(last);
+      if (!posted) {
+        await ledger.postEntry({
+          description: "Posted mid-walk",
+          date: "2026-06-01",
+          debits: [{ accountName: "Cash", amount: Amount.fromMajor(5) }],
+          credits: [{ accountName: "Revenue", amount: Amount.fromMajor(5) }],
+        });
+        posted = true;
+      }
+    }
+    expect(ascending).toEqual([
+      "Invest",
+      "Sale",
+      "Depreciate",
+      "Posted mid-walk",
+    ]);
+
+    // Descending: a new entry lands behind the starting point, so the walk
+    // covers exactly the journal as of its first page — never repeating or
+    // skipping one of those rows.
+    const descending: string[] = [];
+    cursor = undefined;
+    posted = false;
+    for (;;) {
+      const page = await ledger.walkEntries("desc", {
+        limit: 1,
+        ...(cursor ? { after: cursor } : {}),
+      });
+      const last = page.at(-1);
+      if (!last) break;
+      descending.push(last.description);
+      cursor = entryCursor(last);
+      if (!posted) {
+        await ledger.postEntry({
+          description: "Posted behind the tail",
+          date: "2026-06-02",
+          debits: [{ accountName: "Cash", amount: Amount.fromMajor(6) }],
+          credits: [{ accountName: "Revenue", amount: Amount.fromMajor(6) }],
+        });
+        posted = true;
+      }
+    }
+    expect(descending).toEqual([...ascending].reverse());
+    expect(descending).not.toContain("Posted behind the tail");
   });
 
   it("walks a journal whose dates already disagree with posting order", async () => {
