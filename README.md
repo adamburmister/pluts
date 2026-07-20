@@ -148,6 +148,7 @@ import {
   AccountType,
   Amount,
   entryCursor,
+  type EntryCursor,
   Ledger,
   migrate,
   SqlStorageRepository,
@@ -211,19 +212,25 @@ await ledger.balanceSheet("2024-12-31"); // { assets, liabilities, equity, netIn
 await ledger.incomeStatement({ fromDate: "2024-01-01" }); // { revenue, expenses, netIncome }
 
 // The journal is unbounded — page it. Bounds must be non-negative integers.
-const page = await ledger.allEntries("desc", { limit: 50 }); // newest 50
+// allEntries lists in display order (date, then posting sequence); `offset`
+// jumps around that listing, which is what a paged UI wants.
+await ledger.allEntries("desc", { limit: 50 }); // newest 50
+await ledger.allEntries("desc", { limit: 50, offset: 50 }); // the next screen
 
-// Continue from a cursor: `after` names a row (the journal sequence number),
-// so entries posted or backdated between reads cannot make the walk repeat or
-// skip. A cursor walk runs in posting order — use it for audit walks.
-const last = page.at(-1);
-if (last) {
-  await ledger.allEntries("desc", { limit: 50, after: entryCursor(last) });
+// walkEntries traverses posting order instead, and continues from a cursor.
+// That is the only order in which the journal is append-only, so a walk sees
+// every entry exactly once even if entries are posted or backdated mid-walk.
+let cursor: EntryCursor | undefined;
+for (;;) {
+  const page = await ledger.walkEntries("asc", {
+    limit: 50,
+    ...(cursor ? { after: cursor } : {}),
+  });
+  const last = page.at(-1);
+  if (!last) break;
+  // ...process page...
+  cursor = entryCursor(last);
 }
-
-// `offset` names a position instead, and drifts under concurrent writes —
-// fine for a UI jumping to page 7, not for a walk that must be exact.
-await ledger.allEntries("desc", { limit: 50, offset: 50 });
 ```
 
 Every report is a **single** query, so all of its figures come from one

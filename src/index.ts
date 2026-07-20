@@ -3,6 +3,7 @@ export {
   type AccountTotalsOptions,
   type EntryCursor,
   type EntryPageOptions,
+  type EntryWalkOptions,
   entryCursor,
   type Repository,
 } from "./db/repository.js";

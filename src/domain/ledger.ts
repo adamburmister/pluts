@@ -1,6 +1,7 @@
 import type {
   AccountTotals,
   EntryPageOptions,
+  EntryWalkOptions,
   Repository,
 } from "../db/repository.js";
 import { type Account, aggregateBalances, computeBalance } from "./account.js";
@@ -18,6 +19,7 @@ import {
   dateRangeSchema,
   type EntryInput,
   entryPageSchema,
+  entryWalkSchema,
   toIssues,
 } from "./schemas.js";
 import { AccountType, type DateRange, utcToday } from "./types.js";
@@ -465,14 +467,15 @@ export class Ledger {
   }
 
   /**
-   * The journal, newest first by default. A ledger's journal grows without
-   * bound, so pass `page` to window it: `allEntries("desc", { limit: 50 })`.
+   * The journal in display order — by entry date, then posting sequence,
+   * newest first by default. A ledger's journal grows without bound, so pass
+   * `page` to window it: `allEntries("desc", { limit: 50 })`, then jump with
+   * `offset`.
    *
-   * Continue with `after: entryCursor(lastEntryOfThePage)` — a cursor names a
-   * *row*, so an entry posted or backdated between two reads cannot make the
-   * continuation repeat or skip entries. `offset` names a *position* and does
-   * drift that way; it is fine for a UI jumping to page 7, not for an audit
-   * walk. The two are mutually exclusive.
+   * `offset` names a *position*, so a backdated post between two reads
+   * reorders the rows underneath the window and a later page can repeat or
+   * skip an entry. That is fine for a UI jumping to page 7; when every entry
+   * must be seen exactly once, use {@link walkEntries}.
    *
    * `limit`/`offset` must be non-negative integers ({@link ValidationError}
    * otherwise) — a negative limit reaching SQLite means "unbounded", the
@@ -482,15 +485,6 @@ export class Ledger {
     order: "asc" | "desc" = "desc",
     page: EntryPageOptions = {},
   ): Promise<Entry[]> {
-    return this.repo.allEntries(order, this.parsePage(page));
-  }
-
-  /**
-   * Validate a paging window before it reaches the repository. Throws
-   * {@link ValidationError} on a negative or non-integer bound, a malformed
-   * cursor, or a cursor combined with an offset.
-   */
-  private parsePage(page: EntryPageOptions): EntryPageOptions {
     const parsed = entryPageSchema.safeParse(page);
     if (!parsed.success) {
       throw new ValidationError(
@@ -498,12 +492,51 @@ export class Ledger {
         "Invalid page options",
       );
     }
-    const { limit, offset, after } = parsed.data ?? {};
-    return {
+    const { limit, offset } = parsed.data ?? {};
+    return this.repo.allEntries(order, {
       ...(limit !== undefined ? { limit } : {}),
       ...(offset !== undefined ? { offset } : {}),
+    });
+  }
+
+  /**
+   * The journal in **posting order**, for walking all of it. Continue each
+   * page with `after: entryCursor(lastEntryOfThePage)`:
+   *
+   * ```ts
+   * let cursor: EntryCursor | undefined;
+   * for (;;) {
+   *   const page = await ledger.walkEntries("asc", {
+   *     limit: 50,
+   *     ...(cursor ? { after: cursor } : {}),
+   *   });
+   *   const last = page.at(-1);
+   *   if (!last) break;
+   *   cursor = entryCursor(last);
+   * }
+   * ```
+   *
+   * Posting order is the only order in which the journal is append-only, so
+   * it is the only one a complete walk can rely on: entries posted or
+   * backdated mid-walk take the next sequence number and are visited in turn,
+   * and none can appear behind the cursor.
+   */
+  async walkEntries(
+    order: "asc" | "desc" = "desc",
+    page: EntryWalkOptions = {},
+  ): Promise<Entry[]> {
+    const parsed = entryWalkSchema.safeParse(page);
+    if (!parsed.success) {
+      throw new ValidationError(
+        toIssues(parsed.error.issues),
+        "Invalid walk options",
+      );
+    }
+    const { limit, after } = parsed.data ?? {};
+    return this.repo.walkEntries(order, {
+      ...(limit !== undefined ? { limit } : {}),
       ...(after !== undefined ? { after } : {}),
-    };
+    });
   }
 
   /**

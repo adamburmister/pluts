@@ -181,9 +181,15 @@ describe("report queries (real SQLite)", () => {
     await expect(
       ledger.allEntries("desc", { limit: 1.5 }),
     ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      ledger.walkEntries("asc", { limit: -1 }),
+    ).rejects.toBeInstanceOf(ValidationError);
     // The repository guards the same seam directly, for callers bypassing the
     // Ledger facade.
     await expect(repo.allEntries("desc", { limit: -1 })).rejects.toBeInstanceOf(
+      RepositoryError,
+    );
+    await expect(repo.walkEntries("asc", { limit: -1 })).rejects.toBeInstanceOf(
       RepositoryError,
     );
   });
@@ -227,7 +233,7 @@ describe("report queries (real SQLite)", () => {
     let cursor: EntryCursor | undefined;
     let inserted = 0;
     for (;;) {
-      const entries = await ledger.allEntries("asc", {
+      const entries = await ledger.walkEntries("asc", {
         limit: 1,
         ...(cursor ? { after: cursor } : {}),
       });
@@ -262,15 +268,40 @@ describe("report queries (real SQLite)", () => {
     expect(seen).toContain("Backdated 2");
   });
 
-  it("refuses to combine a cursor with an offset", async () => {
-    const [first] = await ledger.allEntries("asc", { limit: 1 });
-    if (!first) throw new Error("expected a seeded entry");
-    await expect(
-      ledger.allEntries("asc", { after: entryCursor(first), offset: 1 }),
-    ).rejects.toBeInstanceOf(ValidationError);
-    await expect(
-      repo.allEntries("asc", { after: entryCursor(first), offset: 1 }),
-    ).rejects.toBeInstanceOf(RepositoryError);
+  it("walks a journal whose dates already disagree with posting order", async () => {
+    // The seeded journal is posted in date order, so add an entry backdated
+    // ahead of every existing one: seq 4, but the earliest date. A walk whose
+    // first page came back in date order would open on this row and then
+    // filter `seq > 4`, silently dropping seq 1-3.
+    await ledger.postEntry({
+      description: "Backdated opening balance",
+      date: "2020-01-01",
+      debits: [{ accountName: "Cash", amount: Amount.fromMajor(7) }],
+      credits: [{ accountName: "Equity", amount: Amount.fromMajor(7) }],
+    });
+
+    const seen: string[] = [];
+    let cursor: EntryCursor | undefined;
+    for (;;) {
+      const page = await ledger.walkEntries("asc", {
+        limit: 2,
+        ...(cursor ? { after: cursor } : {}),
+      });
+      const last = page.at(-1);
+      if (!last) break;
+      seen.push(...page.map((e) => e.description));
+      cursor = entryCursor(last);
+    }
+    expect(seen).toEqual([
+      "Invest",
+      "Sale",
+      "Depreciate",
+      "Backdated opening balance",
+    ]);
+
+    // Descending walks are symmetric.
+    const descending = await ledger.walkEntries("desc", { limit: 4 });
+    expect(descending.map((e) => e.description)).toEqual([...seen].reverse());
   });
 
   it("windows the journal with limit and offset", async () => {

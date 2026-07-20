@@ -83,11 +83,17 @@ export const entryPageSchema = z
   .object({
     limit: z.number().int().nonnegative().optional(),
     offset: z.number().int().nonnegative().optional(),
-    after: z.object({ seq: z.number().int().positive() }).optional(),
   })
-  .refine((page) => !(page.after && page.offset), {
-    message: "cannot combine a cursor (after) with an offset",
-    path: ["offset"],
+  .optional();
+
+/**
+ * Optional journal walk window: a limit plus the cursor to continue from.
+ * The cursor is a journal sequence number, which is assigned from 1.
+ */
+export const entryWalkSchema = z
+  .object({
+    limit: z.number().int().nonnegative().optional(),
+    after: z.object({ seq: z.number().int().positive() }).optional(),
   })
   .optional();
 

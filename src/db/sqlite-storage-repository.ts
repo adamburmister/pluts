@@ -27,6 +27,7 @@ import type {
   AccountTotals,
   AccountTotalsOptions,
   EntryPageOptions,
+  EntryWalkOptions,
   Repository,
 } from "./repository.js";
 
@@ -444,31 +445,43 @@ export class SqlStorageRepository implements Repository {
     // `limit: -1` from a query string would return the whole journal.
     const limit = assertPageBound(page.limit, "limit") ?? -1;
     const offset = assertPageBound(page.offset, "offset") ?? 0;
-    if (page.after && offset > 0) {
-      throw new RepositoryError(
-        "allEntries takes either a cursor (after) or an offset, not both",
-      );
-    }
-    // A cursor walk runs in posting order (seq), not the (date, seq) display
-    // order: seq is append-only, so no row can ever appear behind the cursor.
-    // Ordering a walk by date would silently skip an entry backdated before
-    // the cursor's date after the walk passed that point.
+    const rows = this.sql
+      .exec<EntryRow>(
+        `SELECT id, description, date, posted_at, seq
+         FROM pluts_entries
+         ORDER BY date ${dir}, seq ${dir}
+         LIMIT ? OFFSET ?`,
+        limit,
+        offset,
+      )
+      .toArray();
+    return this.loadEntries(rows);
+  }
+
+  async walkEntries(
+    order: "asc" | "desc" = "desc",
+    page: EntryWalkOptions = {},
+  ): Promise<Entry[]> {
+    const dir = order === "asc" ? "ASC" : "DESC";
+    const limit = assertPageBound(page.limit, "limit") ?? -1;
+    // Both the ordering and the cursor predicate are the sequence number, on
+    // every page including the first. Ordering the opening page by date and
+    // continuing by seq would skip any entry whose date disagrees with its
+    // posting order — exactly the backdated rows a walk exists to catch.
     const cursorClause = page.after
       ? order === "asc"
         ? " WHERE seq > ?"
         : " WHERE seq < ?"
       : "";
     const cursorBinds = page.after ? [page.after.seq] : [];
-    const orderClause = page.after ? `seq ${dir}` : `date ${dir}, seq ${dir}`;
     const rows = this.sql
       .exec<EntryRow>(
         `SELECT id, description, date, posted_at, seq
          FROM pluts_entries${cursorClause}
-         ORDER BY ${orderClause}
-         LIMIT ? OFFSET ?`,
+         ORDER BY seq ${dir}
+         LIMIT ?`,
         ...cursorBinds,
         limit,
-        offset,
       )
       .toArray();
     return this.loadEntries(rows);

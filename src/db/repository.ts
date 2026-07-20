@@ -54,18 +54,19 @@ export interface EntryPageOptions {
    * `offset` addresses a *position*, so an entry posted or backdated between
    * two page reads shifts the ordering underneath it and the next page can
    * repeat or skip an entry. Fine for a UI jumping to page 7; not for an
-   * audit walk that must see every entry exactly once — use `after`.
+   * audit walk that must see every entry exactly once — use
+   * {@link Repository.walkEntries}.
    */
   offset?: number;
+}
+
+/** Windowing for {@link Repository.walkEntries}. */
+export interface EntryWalkOptions {
+  /** Maximum number of entries to return. Omit for the rest of the journal. */
+  limit?: number;
   /**
-   * Continue strictly after this journal position. Unlike `offset` this names
-   * a *row*, so concurrent posts and backdated entries cannot make a
-   * continuation repeat or skip entries. Mutually exclusive with `offset`.
-   *
-   * A cursor walk traverses **posting order** (`seq`), not the `(date, seq)`
-   * display order: posting order is the only one in which the journal is
-   * append-only, and therefore the only one a complete walk can rely on.
-   * `order` still chooses the direction.
+   * Continue strictly after this position. Omit to start from the beginning
+   * (or, descending, the end) of the journal.
    */
   after?: EntryCursor;
 }
@@ -77,7 +78,7 @@ export interface EntryPageOptions {
  * ```ts
  * let cursor: EntryCursor | undefined;
  * for (;;) {
- *   const page = await ledger.allEntries("asc", {
+ *   const page = await ledger.walkEntries("asc", {
  *     limit: 50,
  *     ...(cursor ? { after: cursor } : {}),
  *   });
@@ -137,12 +138,31 @@ export interface Repository {
     key: string,
   ): Promise<{ entryId: string; payloadHash: string } | null>;
   /**
-   * The journal, newest first by default. Pass `page` to window the result —
-   * a full ledger's journal is unbounded, and every returned entry costs
-   * hydration work. Continue a walk with `after` (stable) or `offset`
-   * (positional); see {@link EntryPageOptions}.
+   * The journal in display order — by entry date, then posting sequence,
+   * newest first by default. Pass `page` to window the result: a full
+   * ledger's journal is unbounded, and every returned entry costs hydration
+   * work.
+   *
+   * This listing is for *display*. Paging through it with `offset` cannot
+   * promise to visit every entry exactly once, because a backdated post
+   * reorders the rows underneath the window — use {@link walkEntries} when
+   * completeness matters.
    */
   allEntries(order?: "asc" | "desc", page?: EntryPageOptions): Promise<Entry[]>;
+
+  /**
+   * The journal in **posting order** (`seq`), for walking it completely.
+   *
+   * Posting order is the only order in which the journal is append-only, so
+   * it is the only one a complete walk can rely on: an entry posted or
+   * backdated mid-walk still takes the next sequence number and is visited in
+   * turn, and nothing can ever appear behind the cursor. Continue with
+   * `after: entryCursor(lastEntryOfThePage)`.
+   */
+  walkEntries(
+    order?: "asc" | "desc",
+    page?: EntryWalkOptions,
+  ): Promise<Entry[]>;
 
   /** Sum of credit amounts for an account, optionally within a date range. */
   sumCredits(accountId: string, range?: DateRange): Promise<Amount>;
