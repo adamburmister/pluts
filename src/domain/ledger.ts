@@ -4,7 +4,12 @@ import type {
   EntryWalkOptions,
   Repository,
 } from "../db/repository.js";
-import { type Account, aggregateBalances, computeBalance } from "./account.js";
+import {
+  type Account,
+  accountNameKey,
+  aggregateBalances,
+  computeBalance,
+} from "./account.js";
 import {
   type AmountRecord,
   buildEntry,
@@ -220,7 +225,7 @@ export class Ledger {
     ];
     for (const line of lines) {
       if (typeof line?.accountName === "string" && line.accountName) {
-        names.add(line.accountName);
+        names.add(accountNameKey(line.accountName));
       }
       if (typeof line?.account?.id === "string" && line.account.id) {
         ids.add(line.account.id);
@@ -289,7 +294,7 @@ export class Ledger {
     // Validate FIRST — an invalid payload is invalid input, never a dedup hit.
     const payload: EntryPayload = buildEntry(
       input,
-      (name) => byName.get(name) ?? null,
+      (name) => byName.get(accountNameKey(name)) ?? null,
       this.today,
     );
     this.assertAccountsExist(payload, knownIds);
@@ -325,7 +330,7 @@ export class Ledger {
   }
 
   async getAccountByName(name: string): Promise<Account | null> {
-    return this.repo.getAccountByName(name);
+    return this.repo.getAccountByName(accountNameKey(name));
   }
 
   /** All accounts, ordered by name. */

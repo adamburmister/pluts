@@ -108,6 +108,25 @@ describe("append-only and validity triggers on real DO SQLite", () => {
     });
   }
 
+  it("matches account names case-insensitively after trimming", async () => {
+    await withStorage("account-name-normalization", async (storage, sql) => {
+      migrate(sql);
+      const ledger = new Ledger(new SqlStorageRepository(storage));
+      const cash = await ledger.createAccount({
+        name: "  Cash  ",
+        type: AccountType.Asset,
+      });
+
+      await expect(ledger.getAccountByName(" cash ")).resolves.toMatchObject({
+        id: cash.id,
+        name: "Cash",
+      });
+      await expect(
+        ledger.createAccount({ name: "cash", type: AccountType.Liability }),
+      ).rejects.toMatchObject({ name: "ValidationError" });
+    });
+  });
+
   it("blocks UPDATE and DELETE of posted records", async () => {
     await seeded("attack-update-delete", (sql) => {
       expect(() =>
