@@ -1,4 +1,11 @@
-import type { Repository } from "../../src/db/repository";
+import {
+  type AccountTotals,
+  type AccountTotalsOptions,
+  assertPageBound,
+  type EntryPageOptions,
+  type EntryWalkOptions,
+  type Repository,
+} from "../../src/db/repository";
 import { Account } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
 import {
@@ -184,15 +191,64 @@ export class InMemoryRepository implements Repository {
     return mem ? this.toEntry(mem) : null;
   }
 
-  async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
+  async allEntries(
+    order: "asc" | "desc" = "desc",
+    page: EntryPageOptions = {},
+  ): Promise<Entry[]> {
     const list = [...this.entries.values()];
-    // Deterministic journal order: date first, then posting sequence.
+    // Display order: entry date first, then posting sequence.
     list.sort((a, b) =>
       order === "asc"
         ? a.date.localeCompare(b.date) || a.seq - b.seq
         : b.date.localeCompare(a.date) || b.seq - a.seq,
     );
-    return list.map((m) => this.toEntry(m));
+    // The same bounds guard the production repository uses: a double that
+    // accepted `limit: -1` would keep a test green for input that throws in
+    // production (JS slice would quietly drop the last entry instead).
+    const limit = assertPageBound(page.limit, "limit");
+    const offset = assertPageBound(page.offset, "offset") ?? 0;
+    const windowed =
+      limit === undefined
+        ? list.slice(offset)
+        : list.slice(offset, offset + limit);
+    return windowed.map((m) => this.toEntry(m));
+  }
+
+  async walkEntries(
+    order: "asc" | "desc" = "desc",
+    page: EntryWalkOptions = {},
+  ): Promise<Entry[]> {
+    const after = page.after;
+    const limit = assertPageBound(page.limit, "limit");
+    // Posting order on every page, cursored or not — see walkEntries in the
+    // Repository port for why a walk cannot use the date ordering.
+    const list = [...this.entries.values()].sort((a, b) =>
+      order === "asc" ? a.seq - b.seq : b.seq - a.seq,
+    );
+    const remaining = after
+      ? list.filter((m) =>
+          order === "asc" ? m.seq > after.seq : m.seq < after.seq,
+        )
+      : list;
+    const windowed =
+      limit === undefined ? remaining : remaining.slice(0, limit);
+    return windowed.map((m) => this.toEntry(m));
+  }
+
+  async accountTotals(
+    options: AccountTotalsOptions = {},
+  ): Promise<AccountTotals[]> {
+    return [...this.accounts.values()]
+      .filter(
+        (rec) =>
+          options.types === undefined || options.types.includes(rec.type),
+      )
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((rec) => ({
+        account: this.toAccount(rec),
+        credits: this.sum(rec.credits, options.range),
+        debits: this.sum(rec.debits, options.range),
+      }));
   }
 
   async entrySequenceStats(): Promise<{ count: number; maxSeq: number }> {

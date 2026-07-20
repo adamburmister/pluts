@@ -147,6 +147,8 @@ import { DurableObject } from "cloudflare:workers";
 import {
   AccountType,
   Amount,
+  entryCursor,
+  type EntryCursor,
   Ledger,
   migrate,
   SqlStorageRepository,
@@ -208,7 +210,34 @@ await ledger.trialBalanceReport("2024-12-31"); // classic listing: per-account d
 // the income statement is a period (flow) statement and takes a range.
 await ledger.balanceSheet("2024-12-31"); // { assets, liabilities, equity, netIncome, balanced }
 await ledger.incomeStatement({ fromDate: "2024-01-01" }); // { revenue, expenses, netIncome }
+
+// The journal is unbounded — page it. Bounds must be non-negative integers.
+// allEntries lists in display order (date, then posting sequence); `offset`
+// jumps around that listing, which is what a paged UI wants.
+await ledger.allEntries("desc", { limit: 50 }); // newest 50
+await ledger.allEntries("desc", { limit: 50, offset: 50 }); // the next screen
+
+// walkEntries traverses posting order instead, and continues from a cursor.
+// That is the only order in which the journal is append-only, so a walk never
+// repeats or skips a row, whatever is posted or backdated while it runs.
+// Ascending is open-ended (mid-walk postings are visited in turn); descending
+// is a fixed tail (it covers the journal as of its first page).
+let cursor: EntryCursor | undefined;
+for (;;) {
+  const page = await ledger.walkEntries("asc", {
+    limit: 50,
+    ...(cursor ? { after: cursor } : {}),
+  });
+  const last = page.at(-1);
+  if (!last) break;
+  // ...process page...
+  cursor = entryCursor(last);
+}
 ```
+
+Every report is a **single** query, so all of its figures come from one
+consistent view of the ledger: a write landing mid-report cannot produce a
+trial balance that fails its own `balanced` check.
 
 A complete runnable example lives in the [pluts-ledger-do](https://github.com/adamburmister/pluts-ledger-do) app, which wraps this pattern in a DO with a JSON REST surface and a seed route.
 

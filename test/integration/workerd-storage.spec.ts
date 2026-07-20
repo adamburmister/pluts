@@ -9,7 +9,7 @@ import { getLedgerMeta, migrate, SCHEMA_VERSION } from "../../src/db/schema";
 import { SqlStorageRepository } from "../../src/db/sqlite-storage-repository";
 import { Amount, SCALE } from "../../src/domain/amount";
 import { RepositoryError, ValidationError } from "../../src/domain/errors";
-import { Ledger } from "../../src/domain/ledger";
+import { Ledger, type TrialBalanceReport } from "../../src/domain/ledger";
 import { AccountType } from "../../src/domain/types";
 
 /**
@@ -327,6 +327,70 @@ describe("Ledger over the production repository on real DO SQLite", () => {
           )
           .one(),
       ).toEqual({ n: 0 });
+    });
+  });
+});
+
+describe("reports stay snapshot-consistent under concurrent writes", () => {
+  // Issue #28: reporting used to sum account-by-account, with an await
+  // between each pair of sums. A post landing in one of those gaps produced a
+  // report whose rows described different ledger states — a trial balance
+  // that failed its own balanced check on a perfectly healthy ledger. Each
+  // report is now a single synchronous query, so no write can interleave.
+  it("every interleaved trial balance balances", async () => {
+    await withStorage("report-concurrency", async (storage, sql) => {
+      migrate(sql);
+      const ledger = new Ledger(new SqlStorageRepository(storage));
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+      await ledger.createAccount({
+        name: "Expense",
+        type: AccountType.Expense,
+      });
+
+      // Interleave posts and reports without awaiting in between, so the
+      // microtask queue runs them against each other.
+      const pending: Promise<unknown>[] = [];
+      const reports: Promise<TrialBalanceReport>[] = [];
+      const trialBalances: Promise<bigint>[] = [];
+      for (let i = 0; i < 25; i++) {
+        pending.push(
+          ledger.postEntry({
+            description: `Sale ${i}`,
+            date: "2026-01-05",
+            debits: [{ accountName: "Cash", amount: Amount.fromMajor(10) }],
+            credits: [{ accountName: "Revenue", amount: Amount.fromMajor(10) }],
+          }),
+        );
+        reports.push(ledger.trialBalanceReport());
+        trialBalances.push(ledger.trialBalance());
+        pending.push(
+          ledger.postEntry({
+            description: `Spend ${i}`,
+            date: "2026-01-05",
+            debits: [{ accountName: "Expense", amount: Amount.fromMajor(4) }],
+            credits: [{ accountName: "Cash", amount: Amount.fromMajor(4) }],
+          }),
+        );
+      }
+      await Promise.all(pending);
+
+      for (const report of await Promise.all(reports)) {
+        expect(report.balanced).toBe(true);
+        expect(report.totalDebits).toBe(report.totalCredits);
+      }
+      for (const trialBalance of await Promise.all(trialBalances)) {
+        expect(trialBalance).toBe(0n);
+      }
+
+      // And the finished ledger is what the interleaved reports converged on.
+      const final = await ledger.trialBalanceReport();
+      expect(final.balanced).toBe(true);
+      expect(await ledger.allEntries()).toHaveLength(50);
+      expect(await ledger.allEntries("desc", { limit: 10 })).toHaveLength(10);
     });
   });
 });

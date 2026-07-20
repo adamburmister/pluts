@@ -1,4 +1,9 @@
-import type { Repository } from "../db/repository.js";
+import type {
+  AccountTotals,
+  EntryPageOptions,
+  EntryWalkOptions,
+  Repository,
+} from "../db/repository.js";
 import { type Account, aggregateBalances, computeBalance } from "./account.js";
 import {
   type AmountRecord,
@@ -13,6 +18,8 @@ import {
   createAccountSchema,
   dateRangeSchema,
   type EntryInput,
+  entryPageSchema,
+  entryWalkSchema,
   toIssues,
 } from "./schemas.js";
 import { AccountType, type DateRange, utcToday } from "./types.js";
@@ -76,6 +83,35 @@ export interface TrialBalanceReport {
 function asOfRange(asOf?: Date | string): DateRange | undefined {
   return asOf === undefined ? undefined : { toDate: asOf };
 }
+
+/**
+ * Turn per-account credit/debit totals into the type/contra/balance shape
+ * {@link aggregateBalances} consumes.
+ */
+function toBalances(
+  totals: readonly AccountTotals[],
+): { type: AccountType; contra: boolean; balance: bigint }[] {
+  return totals.map(({ account, credits, debits }) => ({
+    type: account.type,
+    contra: account.contra,
+    balance: computeBalance(account.type, account.contra, credits, debits),
+  }));
+}
+
+/** Every account type, for reports that span the whole chart of accounts. */
+const ALL_ACCOUNT_TYPES = [
+  AccountType.Asset,
+  AccountType.Liability,
+  AccountType.Equity,
+  AccountType.Revenue,
+  AccountType.Expense,
+] as const;
+
+/** The two types an income statement reports on. */
+const INCOME_STATEMENT_TYPES = [
+  AccountType.Revenue,
+  AccountType.Expense,
+] as const;
 
 /** Construction options for {@link Ledger}. */
 export interface LedgerOptions {
@@ -237,20 +273,19 @@ export class Ledger {
    * Aggregate net sum for all accounts of a type (contra subtracted) over an
    * already-validated range. Shared by the public balance/movement methods
    * and the report builders, which pass ranges they validated themselves.
+   *
+   * One repository call, so every account is summed from the same view of the
+   * ledger — see {@link Repository.accountTotals}.
    */
   private async netByType(
     type: AccountType,
     range?: DateRange,
   ): Promise<bigint> {
-    const accounts = await this.repo.getAccountsByType(type);
-    const balances = await Promise.all(
-      accounts.map(async (a) => ({
-        type: a.type,
-        contra: a.contra,
-        balance: await this.netForAccount(a, range),
-      })),
-    );
-    return aggregateBalances(balances, type);
+    const totals = await this.repo.accountTotals({
+      types: [type],
+      ...(range !== undefined ? { range } : {}),
+    });
+    return aggregateBalances(toBalances(totals), type);
   }
 
   /**
@@ -298,6 +333,34 @@ export class Ledger {
   }
 
   /**
+   * Net sum of each requested account type over an already-validated range,
+   * from a single repository read.
+   *
+   * The multi-type reports (trial balance, balance sheet, income statement)
+   * all derive from this: one query means every figure in a statement
+   * describes the same instant of the ledger, so a write landing mid-report
+   * cannot make the statement contradict itself. Each report asks only for
+   * the types it reports on — an income statement must not fail because some
+   * unrelated asset account's total left the safe integer range.
+   */
+  private async netsByType<T extends AccountType>(
+    types: readonly T[],
+    range: DateRange | undefined,
+  ): Promise<Record<T, bigint>> {
+    const balances = toBalances(
+      await this.repo.accountTotals({
+        types: [...types],
+        ...(range !== undefined ? { range } : {}),
+      }),
+    );
+    const nets = {} as Record<T, bigint>;
+    for (const type of types) {
+      nets[type] = aggregateBalances(balances, type);
+    }
+    return nets;
+  }
+
+  /**
    * Trial balance: should always be zero for a balanced ledger.
    * Asset - (Liability + Equity + Revenue - Expense).
    *
@@ -307,14 +370,14 @@ export class Ledger {
    */
   async trialBalance(asOf?: Date | string): Promise<bigint> {
     const range = this.parseRange(asOfRange(asOf));
-    const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
-      this.netByType(AccountType.Asset, range),
-      this.netByType(AccountType.Liability, range),
-      this.netByType(AccountType.Equity, range),
-      this.netByType(AccountType.Revenue, range),
-      this.netByType(AccountType.Expense, range),
-    ]);
-    return assets - (liabilities + equity + revenue - expenses);
+    const nets = await this.netsByType(ALL_ACCOUNT_TYPES, range);
+    return (
+      nets[AccountType.Asset] -
+      (nets[AccountType.Liability] +
+        nets[AccountType.Equity] +
+        nets[AccountType.Revenue] -
+        nets[AccountType.Expense])
+    );
   }
 
   /**
@@ -324,15 +387,16 @@ export class Ledger {
    */
   async trialBalanceReport(asOf?: Date | string): Promise<TrialBalanceReport> {
     const range = this.parseRange(asOfRange(asOf));
-    const accounts = await this.repo.allAccounts();
+    // One query for the whole listing: per-account sums with awaits between
+    // them could interleave with a write and produce a report whose rows come
+    // from different ledger states — failing its own balanced check.
+    const totals = await this.repo.accountTotals(
+      range !== undefined ? { range } : {},
+    );
     const rows: TrialBalanceRow[] = [];
     let totalDebits = 0n;
     let totalCredits = 0n;
-    for (const account of accounts) {
-      const [credits, debits] = await Promise.all([
-        this.repo.sumCredits(account.id, range),
-        this.repo.sumDebits(account.id, range),
-      ]);
+    for (const { account, credits, debits } of totals) {
       // Raw debit/credit arithmetic, independent of account type or contra
       // flag: the net lands in whichever column it favors.
       const net = debits.minor - credits.minor;
@@ -361,13 +425,12 @@ export class Ledger {
    */
   async balanceSheet(asOf?: Date | string): Promise<BalanceSheet> {
     const range = this.parseRange(asOfRange(asOf));
-    const [assets, liabilities, equity, revenue, expenses] = await Promise.all([
-      this.netByType(AccountType.Asset, range),
-      this.netByType(AccountType.Liability, range),
-      this.netByType(AccountType.Equity, range),
-      this.netByType(AccountType.Revenue, range),
-      this.netByType(AccountType.Expense, range),
-    ]);
+    const nets = await this.netsByType(ALL_ACCOUNT_TYPES, range);
+    const assets = nets[AccountType.Asset];
+    const liabilities = nets[AccountType.Liability];
+    const equity = nets[AccountType.Equity];
+    const revenue = nets[AccountType.Revenue];
+    const expenses = nets[AccountType.Expense];
     // Net income (revenue - expenses) is retained earnings, part of equity on
     // a real balance sheet. The balanced check includes it so the accounting
     // equation holds: Assets = Liabilities + Equity + Net Income.
@@ -382,11 +445,12 @@ export class Ledger {
   }
 
   async incomeStatement(range?: DateRange): Promise<IncomeStatement> {
-    range = this.parseRange(range);
-    const [revenue, expenses] = await Promise.all([
-      this.netByType(AccountType.Revenue, range),
-      this.netByType(AccountType.Expense, range),
-    ]);
+    const nets = await this.netsByType(
+      INCOME_STATEMENT_TYPES,
+      this.parseRange(range),
+    );
+    const revenue = nets[AccountType.Revenue];
+    const expenses = nets[AccountType.Expense];
     return {
       revenue,
       expenses,
@@ -402,8 +466,77 @@ export class Ledger {
     return this.repo.amountsForAccount(account.id);
   }
 
-  async allEntries(order: "asc" | "desc" = "desc"): Promise<Entry[]> {
-    return this.repo.allEntries(order);
+  /**
+   * The journal in display order — by entry date, then posting sequence,
+   * newest first by default. A ledger's journal grows without bound, so pass
+   * `page` to window it: `allEntries("desc", { limit: 50 })`, then jump with
+   * `offset`.
+   *
+   * `offset` names a *position*, so a backdated post between two reads
+   * reorders the rows underneath the window and a later page can repeat or
+   * skip an entry. That is fine for a UI jumping to page 7; when every entry
+   * must be seen exactly once, use {@link walkEntries}.
+   *
+   * `limit`/`offset` must be non-negative integers ({@link ValidationError}
+   * otherwise) — a negative limit reaching SQLite means "unbounded", the
+   * opposite of what a caller passing one intends.
+   */
+  async allEntries(
+    order: "asc" | "desc" = "desc",
+    page: EntryPageOptions = {},
+  ): Promise<Entry[]> {
+    const parsed = entryPageSchema.safeParse(page);
+    if (!parsed.success) {
+      throw new ValidationError(
+        toIssues(parsed.error.issues),
+        "Invalid page options",
+      );
+    }
+    const { limit, offset } = parsed.data ?? {};
+    return this.repo.allEntries(order, {
+      ...(limit !== undefined ? { limit } : {}),
+      ...(offset !== undefined ? { offset } : {}),
+    });
+  }
+
+  /**
+   * The journal in **posting order**, for walking all of it. Continue each
+   * page with `after: entryCursor(lastEntryOfThePage)`:
+   *
+   * ```ts
+   * let cursor: EntryCursor | undefined;
+   * for (;;) {
+   *   const page = await ledger.walkEntries("asc", {
+   *     limit: 50,
+   *     ...(cursor ? { after: cursor } : {}),
+   *   });
+   *   const last = page.at(-1);
+   *   if (!last) break;
+   *   cursor = entryCursor(last);
+   * }
+   * ```
+   *
+   * Posting order is the only order in which the journal is append-only, so
+   * it is the only one a complete walk can rely on: entries posted or
+   * backdated mid-walk take the next sequence number and are visited in turn,
+   * and none can appear behind the cursor.
+   */
+  async walkEntries(
+    order: "asc" | "desc" = "desc",
+    page: EntryWalkOptions = {},
+  ): Promise<Entry[]> {
+    const parsed = entryWalkSchema.safeParse(page);
+    if (!parsed.success) {
+      throw new ValidationError(
+        toIssues(parsed.error.issues),
+        "Invalid walk options",
+      );
+    }
+    const { limit, after } = parsed.data ?? {};
+    return this.repo.walkEntries(order, {
+      ...(limit !== undefined ? { limit } : {}),
+      ...(after !== undefined ? { after } : {}),
+    });
   }
 
   /**
