@@ -41,6 +41,22 @@ describe("Ledger (in-memory)", () => {
       ).rejects.toBeInstanceOf(ValidationError);
     });
 
+    it("matches account names case-insensitively after trimming", async () => {
+      const cash = await ledger.createAccount({
+        name: "  Cash  ",
+        type: AccountType.Asset,
+      });
+
+      await expect(
+        ledger.createAccount({ name: "cash", type: AccountType.Liability }),
+      ).rejects.toBeInstanceOf(ValidationError);
+
+      await expect(ledger.getAccountByName(" cash ")).resolves.toMatchObject({
+        id: cash.id,
+        name: "Cash",
+      });
+    });
+
     it("creates contra accounts", async () => {
       const acc = await ledger.createAccount({
         name: "Drawing",
@@ -52,6 +68,25 @@ describe("Ledger (in-memory)", () => {
   });
 
   describe("postEntry", () => {
+    it("resolves postEntry account names case-insensitively after trimming", async () => {
+      const cash = await ledger.createAccount({
+        name: "Cash",
+        type: AccountType.Asset,
+      });
+      await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+
+      await ledger.postEntry({
+        description: "Sale",
+        debits: [{ accountName: " cash ", amount: Amount.fromMajor(10) }],
+        credits: [{ accountName: "revenue", amount: Amount.fromMajor(10) }],
+      });
+
+      expect(formatAmount(await ledger.accountBalance(cash))).toBe("10.00");
+    });
+
     it("posts a balanced entry and updates balances", async () => {
       const cash = await ledger.createAccount({
         name: "Cash",

@@ -2,7 +2,7 @@ import type {
   DurableObjectStorage,
   SqlStorageValue,
 } from "@cloudflare/workers-types";
-import { Account } from "../domain/account.js";
+import { Account, accountNameKey } from "../domain/account.js";
 import { Amount } from "../domain/amount.js";
 import {
   type AmountKind,
@@ -242,8 +242,8 @@ export class SqlStorageRepository implements Repository {
   async getAccountByName(name: string): Promise<Account | null> {
     const rows = this.sql
       .exec<AccountRow>(
-        "SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE name = ?",
-        name,
+        "SELECT id, name, type, contra, created_at FROM pluts_accounts WHERE name = ? COLLATE NOCASE",
+        accountNameKey(name),
       )
       .toArray();
     const row = rows[0];
