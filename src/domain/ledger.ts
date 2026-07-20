@@ -1,10 +1,12 @@
 import type {
   AccountTotals,
+  AccountTotalsOptions,
   EntryPageOptions,
   EntryWalkOptions,
   Repository,
 } from "../db/repository.js";
 import { type Account, aggregateBalances, computeBalance } from "./account.js";
+import { type AccountDTO, toAccountDTO } from "./dto.js";
 import {
   type AmountRecord,
   buildEntry,
@@ -259,6 +261,29 @@ export class Ledger {
   /** All accounts, ordered by name. */
   async allAccounts(): Promise<Account[]> {
     return this.repo.allAccounts();
+  }
+
+  /**
+   * Every account as a boundary-safe {@link AccountDTO}, each carrying its
+   * current net balance (signed, in major units). One repository read, so the
+   * balances describe a single instant of the ledger.
+   *
+   * Use this for any "list accounts with their balances" view — a dashboard,
+   * a chart of accounts, a reconciliation screen. It is deliberately separate
+   * from {@link allAccounts}: that path is cheap and balance-free, while this
+   * one computes a balance per account. Cumulative up to and including `asOf`
+   * (default: everything); pass a range to bound it to a period.
+   */
+  async accountsWithBalances(
+    options?: AccountTotalsOptions,
+  ): Promise<AccountDTO[]> {
+    const totals = await this.repo.accountTotals(options);
+    return totals.map(({ account, credits, debits }) =>
+      toAccountDTO(
+        account,
+        computeBalance(account.type, account.contra, credits, debits),
+      ),
+    );
   }
 
   /**

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Account } from "../../src/domain/account";
 import { Amount, formatAmount } from "../../src/domain/amount";
+import type { AccountDTO } from "../../src/domain/dto";
 import { ValidationError } from "../../src/domain/errors";
 import { Ledger } from "../../src/domain/ledger";
 import { AccountType } from "../../src/domain/types";
@@ -149,6 +150,90 @@ describe("Ledger (in-memory)", () => {
         credits: [{ accountName: "Revenue", amount: Amount.fromMajor(1) }],
       });
       expect(entry.date).toBe(new Date().toISOString().slice(0, 10));
+    });
+  });
+
+  describe("accountsWithBalances", () => {
+    it("returns every account with its net balance in major units", async () => {
+      const cash = await ledger.createAccount({
+        name: "Cash",
+        type: AccountType.Asset,
+      });
+      const revenue = await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+      await ledger.postEntry({
+        description: "Sale",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(100) }],
+        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
+      });
+
+      const dtos = await ledger.accountsWithBalances();
+      expect(dtos).toHaveLength(2);
+      const byName = (name: string): AccountDTO => {
+        const found = dtos.find((d) => d.name === name);
+        expect(found).toBeDefined();
+        return found as AccountDTO;
+      };
+      expect(byName("Cash").balance).toBe("100.00");
+      expect(byName("Revenue").balance).toBe("100.00");
+      expect(byName("Cash").id).toBe(cash.id);
+      expect(byName("Revenue").id).toBe(revenue.id);
+    });
+
+    it("reports a zero balance for an account with no activity", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      const [cash] = await ledger.accountsWithBalances();
+      expect(cash?.balance).toBe("0.00");
+    });
+
+    it("returns DTOs without breaking the RPC/JSON boundary", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      const dtos = await ledger.accountsWithBalances();
+      const cloned = structuredClone(dtos);
+      expect(() => JSON.stringify(cloned)).not.toThrow();
+      expect(cloned[0]?.balance).toBe("0.00");
+    });
+
+    it("honors a type filter", async () => {
+      await ledger.createAccount({ name: "Cash", type: AccountType.Asset });
+      await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+      const dtos = await ledger.accountsWithBalances({
+        types: [AccountType.Asset],
+      });
+      expect(dtos.map((d) => d.name)).toEqual(["Cash"]);
+    });
+
+    it("formats a negative balance for a contra account", async () => {
+      await ledger.createAccount({
+        name: "Cash",
+        type: AccountType.Asset,
+      });
+      await ledger.createAccount({
+        name: "Drawing",
+        type: AccountType.Equity,
+        contra: true,
+      });
+      await ledger.postEntry({
+        description: "Owner withdrawal",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(50) }],
+        credits: [{ accountName: "Drawing", amount: Amount.fromMajor(50) }],
+      });
+
+      const dtos = await ledger.accountsWithBalances();
+      const byName = (name: string): AccountDTO => {
+        const found = dtos.find((d) => d.name === name);
+        expect(found).toBeDefined();
+        return found as AccountDTO;
+      };
+      // Drawing is a contra-equity (normal credit balance) account, so a credit
+      // makes its net balance negative.
+      expect(byName("Drawing").balance).toBe("-50.00");
+      expect(byName("Cash").balance).toBe("50.00");
     });
   });
 

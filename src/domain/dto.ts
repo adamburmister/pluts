@@ -1,4 +1,5 @@
 import type { Account } from "./account.js";
+import { type Amount, formatAmount } from "./amount.js";
 import type { AmountRecord, Entry } from "./entry.js";
 import type { AccountType } from "./types.js";
 
@@ -48,21 +49,44 @@ function freeze<T>(value: T): T {
   return Object.freeze(value);
 }
 
-export function toAccountDTO(account: Account): AccountDTO {
+/**
+ * Map an {@link Account} to its boundary-safe DTO.
+ *
+ * `balance`, when supplied, is the account's net balance in minor units —
+ * either a non-negative {@link Amount} or a signed `bigint` (a balance may
+ * be negative, e.g. an overdrawn asset, which `Amount` cannot represent). It
+ * is formatted to major units and included as `balance`. Omit it for the
+ * default DTO without a balance.
+ */
+export function toAccountDTO(
+  account: Account,
+  balance?: Amount | bigint,
+): AccountDTO {
   return freeze({
     id: account.id,
     name: account.name,
     type: account.type,
     contra: account.contra,
     createdAt: account.createdAt,
+    ...(balance === undefined
+      ? {}
+      : {
+          balance:
+            typeof balance === "bigint"
+              ? formatAmount(balance)
+              : balance.toMajor(),
+        }),
   });
 }
 
-export function toAmountLineDTO(line: AmountRecord): AmountLineDTO {
+export function toAmountLineDTO(
+  line: AmountRecord,
+  balance?: Amount | bigint,
+): AmountLineDTO {
   return freeze({
     id: line.id,
     kind: line.kind,
-    account: toAccountDTO(line.account),
+    account: toAccountDTO(line.account, balance),
     amount: line.amount.toMajor(),
     entryId: line.entryId,
   });
@@ -74,8 +98,8 @@ export function toEntryDTO(entry: Entry): EntryDTO {
     description: entry.description,
     date: entry.date,
     seq: entry.seq,
-    debitAmounts: entry.debitAmounts.map(toAmountLineDTO),
-    creditAmounts: entry.creditAmounts.map(toAmountLineDTO),
+    debitAmounts: entry.debitAmounts.map((line) => toAmountLineDTO(line)),
+    creditAmounts: entry.creditAmounts.map((line) => toAmountLineDTO(line)),
     postedAt: entry.postedAt,
   });
 }
