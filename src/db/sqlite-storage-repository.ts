@@ -52,15 +52,22 @@ function chunk<T>(items: T[], size: number): T[][] {
  * Bridge a minor-units `bigint` onto SqlStorage's `number` bind type.
  *
  * SqlStorage cannot bind bigint, so every amount crosses an IEEE 754 boundary
- * at this seam. `Number()` does not error on precision loss — above 2^53 it
+ * at this seam. `Number()` does not error on precision loss — outside ±2^53 it
  * silently rounds, which for a ledger means corrupted money. Fail loudly
  * instead. (The ~2^53 ceiling is ~$90T at scale 2; it shrinks to ~90M major
  * units at scale 8, so the guard matters if SCALE is ever raised.)
+ *
+ * The range is guarded on both sides. `Amount.minor` is non-negative, so only
+ * the ceiling is reachable through the library's own write path, but this is
+ * an exported general-purpose bridge and the exact integer range is symmetric.
  */
 export function toStorageInt(minor: bigint): number {
-  if (minor > BigInt(Number.MAX_SAFE_INTEGER)) {
+  if (
+    minor > BigInt(Number.MAX_SAFE_INTEGER) ||
+    minor < BigInt(Number.MIN_SAFE_INTEGER)
+  ) {
     throw new RepositoryError(
-      `Amount ${minor} minor units exceeds the exact integer range of SqlStorage (2^53 - 1)`,
+      `Amount ${minor} minor units is outside the exact integer range of SqlStorage (±(2^53 - 1))`,
     );
   }
   return Number(minor);
