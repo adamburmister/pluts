@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { Account } from "../../src/domain/account";
+import { Account } from "../../src/domain/account";
 import { Amount, formatAmount } from "../../src/domain/amount";
 import type { AccountDTO } from "../../src/domain/dto";
 import { ValidationError } from "../../src/domain/errors";
@@ -42,6 +42,22 @@ describe("Ledger (in-memory)", () => {
       ).rejects.toBeInstanceOf(ValidationError);
     });
 
+    it("matches account names case-insensitively after trimming", async () => {
+      const cash = await ledger.createAccount({
+        name: "  Cash  ",
+        type: AccountType.Asset,
+      });
+
+      await expect(
+        ledger.createAccount({ name: "cash", type: AccountType.Liability }),
+      ).rejects.toBeInstanceOf(ValidationError);
+
+      await expect(ledger.getAccountByName(" cash ")).resolves.toMatchObject({
+        id: cash.id,
+        name: "Cash",
+      });
+    });
+
     it("creates contra accounts", async () => {
       const acc = await ledger.createAccount({
         name: "Drawing",
@@ -53,6 +69,25 @@ describe("Ledger (in-memory)", () => {
   });
 
   describe("postEntry", () => {
+    it("resolves postEntry account names case-insensitively after trimming", async () => {
+      const cash = await ledger.createAccount({
+        name: "Cash",
+        type: AccountType.Asset,
+      });
+      await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+
+      await ledger.postEntry({
+        description: "Sale",
+        debits: [{ accountName: " cash ", amount: Amount.fromMajor(10) }],
+        credits: [{ accountName: "revenue", amount: Amount.fromMajor(10) }],
+      });
+
+      expect(formatAmount(await ledger.accountBalance(cash))).toBe("10.00");
+    });
+
     it("posts a balanced entry and updates balances", async () => {
       const cash = await ledger.createAccount({
         name: "Cash",
@@ -93,6 +128,78 @@ describe("Ledger (in-memory)", () => {
       });
       // biome-ignore lint/style/noNonNullAssertion: Testing
       expect(entry.debitAmounts[0]!.account.id).toBe(cash.id);
+    });
+
+    // Issue #29: an account *object* is caller-supplied data, not a
+    // capability. A hand-built, stale, or foreign-ledger Account used to slip
+    // past validation and die at the FK constraint as an opaque
+    // RepositoryError, while the same mistake spelled as an accountName gave a
+    // path-tagged ValidationError. One contract for both spellings.
+    it("rejects an account object whose id is not in this ledger", async () => {
+      const rev = await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+      const ghost = new Account(
+        "no-such-id",
+        "Ghost",
+        AccountType.Asset,
+        false,
+        "2026-01-01",
+      );
+
+      const error = await ledger
+        .postEntry({
+          description: "Sale",
+          debits: [{ account: ghost, amount: Amount.fromMajor(50) }],
+          credits: [{ account: rev, amount: Amount.fromMajor(50) }],
+        })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ValidationError);
+      expect((error as ValidationError).issues).toEqual([
+        {
+          path: ["debits", 0, "account"],
+          message: 'Account "no-such-id" not found',
+        },
+      ]);
+      expect(await ledger.allEntries()).toEqual([]);
+    });
+
+    it("reports every unknown account object, on either side", async () => {
+      const ghostDebit = new Account(
+        "ghost-debit",
+        "Ghost",
+        AccountType.Asset,
+        false,
+        "2026-01-01",
+      );
+      const ghostCredit = new Account(
+        "ghost-credit",
+        "Phantom",
+        AccountType.Revenue,
+        false,
+        "2026-01-01",
+      );
+
+      const error = await ledger
+        .postEntry({
+          description: "Sale",
+          debits: [{ account: ghostDebit, amount: Amount.fromMajor(50) }],
+          credits: [{ account: ghostCredit, amount: Amount.fromMajor(50) }],
+        })
+        .catch((e: unknown) => e);
+
+      expect((error as ValidationError).issues).toEqual([
+        {
+          path: ["debits", 0, "account"],
+          message: 'Account "ghost-debit" not found',
+        },
+        {
+          path: ["credits", 0, "account"],
+          message: 'Account "ghost-credit" not found',
+        },
+      ]);
     });
 
     it("throws ValidationError when amounts do not cancel", async () => {

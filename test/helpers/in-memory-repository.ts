@@ -6,7 +6,7 @@ import {
   type EntryWalkOptions,
   type Repository,
 } from "../../src/db/repository";
-import { Account } from "../../src/domain/account";
+import { Account, accountNameKey } from "../../src/domain/account";
 import { Amount } from "../../src/domain/amount";
 import {
   type AmountRecord,
@@ -72,7 +72,7 @@ export class InMemoryRepository implements Repository {
     type: AccountType;
     contra: boolean;
   }): Promise<Account> {
-    const key = input.name;
+    const key = accountNameKey(input.name);
     if (this.nameIndex.has(key)) {
       throw new ValidationError(
         [{ path: ["name"], message: "has already been taken" }],
@@ -105,7 +105,8 @@ export class InMemoryRepository implements Repository {
   }
 
   async getAccountByName(name: string): Promise<Account | null> {
-    const rec = [...this.accounts.values()].find((a) => a.name === name);
+    const id = this.nameIndex.get(accountNameKey(name));
+    const rec = id ? this.accounts.get(id) : undefined;
     return rec ? this.toAccount(rec) : null;
   }
 

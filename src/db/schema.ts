@@ -32,12 +32,13 @@ export const SCHEMA_STATEMENTS: string[] = [
   created_at TEXT NOT NULL,
   CONSTRAINT pluts_accounts_type_check CHECK (type IN ('Asset','Liability','Equity','Revenue','Expense'))
 )`,
-  // Account names are unique per ledger across ALL types. A (name, type)
-  // uniqueness would let two accounts share a name (e.g. an Asset "Cash" and a
-  // Liability "Cash"), making name-based entry posting ambiguous — the amount
-  // would land on whichever row the lookup happened to return first.
-  `CREATE UNIQUE INDEX IF NOT EXISTS pluts_accounts_name_idx ON pluts_accounts (name)`,
-  `CREATE INDEX IF NOT EXISTS pluts_accounts_type_idx ON pluts_accounts (type, name)`,
+  // Account names are unique per ledger across ALL types and match
+  // case-insensitively after creation/lookup trim. A (name, type) uniqueness
+  // would let two accounts share a name (e.g. an Asset "Cash" and a Liability
+  // "Cash"), making name-based entry posting ambiguous — the amount would
+  // land on whichever row the lookup happened to return first.
+  `CREATE UNIQUE INDEX IF NOT EXISTS pluts_accounts_name_idx ON pluts_accounts (name COLLATE NOCASE)`,
+  `CREATE INDEX IF NOT EXISTS pluts_accounts_type_idx ON pluts_accounts (type, name COLLATE NOCASE)`,
   `CREATE TABLE IF NOT EXISTS pluts_entries (
   id TEXT PRIMARY KEY NOT NULL,
   description TEXT NOT NULL,
@@ -183,7 +184,7 @@ export const SCHEMA_STATEMENTS: string[] = [
   // an ordinary duplicate-name INSERT lands here too.
   `CREATE TRIGGER IF NOT EXISTS pluts_accounts_no_name_replace
   BEFORE INSERT ON pluts_accounts
-  WHEN EXISTS (SELECT 1 FROM pluts_accounts WHERE name = NEW.name)
+  WHEN EXISTS (SELECT 1 FROM pluts_accounts WHERE name = NEW.name COLLATE NOCASE)
   BEGIN SELECT RAISE(ABORT, 'pluts: UNIQUE constraint failed: pluts_accounts.name is already in use'); END`,
   `CREATE TRIGGER IF NOT EXISTS pluts_entries_no_replace
   BEFORE INSERT ON pluts_entries

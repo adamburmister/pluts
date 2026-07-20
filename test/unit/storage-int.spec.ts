@@ -20,9 +20,27 @@ describe("toStorageInt (write path)", () => {
     );
   });
 
+  it("passes exact negative values through", () => {
+    expect(toStorageInt(-123_456n)).toBe(-123456);
+    expect(toStorageInt(BigInt(Number.MIN_SAFE_INTEGER))).toBe(
+      Number.MIN_SAFE_INTEGER,
+    );
+  });
+
   it("throws RepositoryError instead of silently losing precision", () => {
     expect(() => toStorageInt(2n ** 53n)).toThrow(RepositoryError);
     expect(() => toStorageInt(2n ** 53n + 1n)).toThrow(RepositoryError);
+  });
+
+  /**
+   * The upper bound alone is not the contract: the exact integer range is
+   * symmetric. `Amount.minor` is non-negative today, but this bridge is an
+   * exported general-purpose seam, so a large-magnitude negative must fail
+   * as loudly as its positive mirror rather than silently rounding.
+   */
+  it("throws RepositoryError below the safe range too", () => {
+    expect(() => toStorageInt(-(2n ** 53n))).toThrow(RepositoryError);
+    expect(() => toStorageInt(-(2n ** 60n))).toThrow(RepositoryError);
   });
 });
 

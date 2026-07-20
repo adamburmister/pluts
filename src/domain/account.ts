@@ -1,6 +1,14 @@
 import type { Amount } from "./amount.js";
 import { type AccountType, normalCreditBalance } from "./types.js";
 
+/**
+ * Canonical key for account-name matching. Account names are trimmed at
+ * creation and lookup, then matched case-insensitively.
+ */
+export function accountNameKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 /** A persisted account record. The `type` discriminates the accounting behaviour. */
 export class Account {
   constructor(

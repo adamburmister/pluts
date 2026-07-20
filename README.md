@@ -113,7 +113,7 @@ Verified against the real runtime by the workerd integration suite (`test/integr
 
 ### Tenancy
 
-Tenancy is intentionally **not** included. Multi-tenancy is provided by Durable Object isolation: one DO instance = one ledger. Account names are unique within a ledger.
+Tenancy is intentionally **not** included. Multi-tenancy is provided by Durable Object isolation: one DO instance = one ledger. Account names are unique within a ledger after trimming and case-folding: `createAccount` trims the stored name, while `getAccountByName` and name-based `postEntry` lookup trim and match case-insensitively, so `" Cash "` and `"cash"` resolve to the same stored `"Cash"` account.
 
 ### Schema
 
