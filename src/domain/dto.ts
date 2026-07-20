@@ -1,6 +1,12 @@
 import type { Account } from "./account.js";
 import { formatAmount } from "./amount.js";
-import type { AccountId, Amount, AmountLineId, EntryId, ISODate } from "./branded.js";
+import type {
+  AccountId,
+  Amount,
+  AmountLineId,
+  EntryId,
+  ISODate,
+} from "./branded.js";
 import type { AmountRecord, Entry } from "./entry.js";
 import type { AccountType } from "./types.js";
 
