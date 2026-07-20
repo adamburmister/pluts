@@ -283,12 +283,65 @@ describe("Ledger (in-memory)", () => {
         formatAmount(await ledger.balanceByType(AccountType.Revenue)),
       ).toBe("150.00");
 
-      // Date range filter
-      const partial = await ledger.balanceByType(AccountType.Asset, {
+      // Point-in-time: as-of cuts off later entries.
+      const asOfJan = await ledger.balanceByType(
+        AccountType.Asset,
+        "2024-02-01",
+      );
+      expect(formatAmount(asOfJan)).toBe("100.00");
+
+      // Period movement: a range excludes activity outside it.
+      const janMovement = await ledger.movementByType(AccountType.Asset, {
         fromDate: "2024-01-01",
         toDate: "2024-02-01",
       });
-      expect(formatAmount(partial)).toBe("100.00");
+      expect(formatAmount(janMovement)).toBe("100.00");
+    });
+
+    // #26: a fromDate on a "balance" turned it into a period movement
+    // mislabelled as a balance. accountBalance is now as-of-only (cumulative
+    // from inception); accountMovement handles ranges explicitly.
+    it("distinguishes balance (as-of, cumulative) from movement (period net)", async () => {
+      const cash = await ledger.createAccount({
+        name: "Cash",
+        type: AccountType.Asset,
+      });
+      await ledger.createAccount({
+        name: "Revenue",
+        type: AccountType.Revenue,
+      });
+
+      // Prior-period activity...
+      await ledger.postEntry({
+        description: "Opening sale",
+        date: "2026-05-15",
+        debits: [{ account: cash, amount: Amount.fromMajor(100) }],
+        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(100) }],
+      });
+      // ...and current-period activity.
+      await ledger.postEntry({
+        description: "June sale",
+        date: "2026-06-10",
+        debits: [{ account: cash, amount: Amount.fromMajor(40) }],
+        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(40) }],
+      });
+
+      // Balance as of end of June includes the prior period.
+      expect(
+        formatAmount(await ledger.accountBalance(cash, "2026-06-30")),
+      ).toBe("140.00");
+      // June movement excludes it.
+      const june = { fromDate: "2026-06-01", toDate: "2026-06-30" };
+      expect(formatAmount(await ledger.accountMovement(cash, june))).toBe(
+        "40.00",
+      );
+      expect(
+        formatAmount(await ledger.movementByType(AccountType.Asset, june)),
+      ).toBe("40.00");
+      // An unbounded movement equals the all-time balance.
+      expect(formatAmount(await ledger.accountMovement(cash, {}))).toBe(
+        "140.00",
+      );
     });
 
     // F-02: range parameters were passed to the repository unvalidated; a
@@ -299,10 +352,16 @@ describe("Ledger (in-memory)", () => {
         type: AccountType.Asset,
       });
       await expect(
-        ledger.accountBalance(cash, { fromDate: "2024-1-5" }),
+        ledger.accountBalance(cash, "2024-1-5"),
       ).rejects.toBeInstanceOf(ValidationError);
       await expect(
-        ledger.balanceByType(AccountType.Asset, { toDate: "garbage" }),
+        ledger.balanceByType(AccountType.Asset, "garbage"),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.accountMovement(cash, { fromDate: "2024-1-5" }),
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        ledger.movementByType(AccountType.Asset, { toDate: "garbage" }),
       ).rejects.toBeInstanceOf(ValidationError);
       // trialBalance/balanceSheet take an as-of date (F-09); malformed
       // as-of values must still fail validation (F-02).
