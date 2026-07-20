@@ -218,13 +218,15 @@ describe("report queries (real SQLite)", () => {
   });
 
   it("walks the whole journal with a cursor despite concurrent writes", async () => {
-    // The scenario offset paging cannot survive: an entry is posted, and a
-    // second is *backdated* ahead of the walk, between two page reads. Under
-    // OFFSET the ordering shifts beneath the cursor and entries repeat or
-    // vanish; `after` names a row, so the walk stays exact.
+    // The scenario paging must survive: entries are posted, and others
+    // *backdated* behind the walk, between page reads. Under OFFSET the
+    // ordering shifts and entries repeat or vanish; ordering the cursor by
+    // date would drop the backdated ones. Posting order (seq) is append-only,
+    // so the walk sees every entry exactly once.
     const seen: string[] = [];
     let cursor: EntryCursor | undefined;
-    for (let page = 0; page < 3; page++) {
+    let inserted = 0;
+    for (;;) {
       const entries = await ledger.allEntries("asc", {
         limit: 1,
         ...(cursor ? { after: cursor } : {}),
@@ -234,22 +236,30 @@ describe("report queries (real SQLite)", () => {
       seen.push(entry.description);
       cursor = entryCursor(entry);
 
-      await ledger.postEntry({
-        description: `Interleaved ${page}`,
-        date: "2026-12-31",
-        debits: [{ accountName: "Cash", amount: Amount.fromMajor(1) }],
-        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(1) }],
-      });
-      await ledger.postEntry({
-        description: `Backdated ${page}`,
-        date: "2025-01-01",
-        debits: [{ accountName: "Cash", amount: Amount.fromMajor(2) }],
-        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(2) }],
-      });
+      // Keep writing around the walk for its first few pages.
+      if (inserted < 3) {
+        await ledger.postEntry({
+          description: `Later ${inserted}`,
+          date: "2026-12-31",
+          debits: [{ accountName: "Cash", amount: Amount.fromMajor(1) }],
+          credits: [{ accountName: "Revenue", amount: Amount.fromMajor(1) }],
+        });
+        await ledger.postEntry({
+          description: `Backdated ${inserted}`,
+          date: "2025-01-01",
+          debits: [{ accountName: "Cash", amount: Amount.fromMajor(2) }],
+          credits: [{ accountName: "Revenue", amount: Amount.fromMajor(2) }],
+        });
+        inserted++;
+      }
     }
-    // No repeats, no skips: the three seeded entries in journal order, even
-    // though six entries were inserted around the walk.
-    expect(seen).toEqual(["Invest", "Sale", "Depreciate"]);
+
+    // No repeats, no skips — including the entries backdated to 2025 after
+    // the walk had already passed that date.
+    expect(new Set(seen).size).toBe(seen.length);
+    const journal = await ledger.allEntries("asc");
+    expect([...seen].sort()).toEqual(journal.map((e) => e.description).sort());
+    expect(seen).toContain("Backdated 2");
   });
 
   it("refuses to combine a cursor with an offset", async () => {

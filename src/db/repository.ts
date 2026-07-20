@@ -28,12 +28,18 @@ export interface AccountTotalsOptions {
 }
 
 /**
- * A position in the journal's `(date, seq)` ordering — the last entry a
- * caller has already seen. Build one with {@link entryCursor}.
+ * A position in the journal's **posting order** — the last entry a caller has
+ * already seen. Build one with {@link entryCursor}.
+ *
+ * The position is the journal sequence number, not the entry date. `seq` is
+ * assigned monotonically at posting time and never changes, so nothing can
+ * ever appear *behind* a cursor: a backdated entry posted mid-walk still gets
+ * the next sequence number and is visited in turn. A `(date, seq)` cursor
+ * cannot promise that — an entry backdated before the cursor's date would be
+ * silently skipped by an ascending walk, which is precisely the guarantee an
+ * audit walk needs.
  */
 export interface EntryCursor {
-  /** The entry's ISO `yyyy-mm-dd` date. */
-  date: string;
   /** The entry's journal sequence number. */
   seq: number;
 }
@@ -52,10 +58,14 @@ export interface EntryPageOptions {
    */
   offset?: number;
   /**
-   * Continue strictly after this journal position, in the requested order.
-   * Unlike `offset` this names a *row*, so concurrent posts and backdated
-   * entries cannot make a continuation repeat or skip entries. Mutually
-   * exclusive with `offset`.
+   * Continue strictly after this journal position. Unlike `offset` this names
+   * a *row*, so concurrent posts and backdated entries cannot make a
+   * continuation repeat or skip entries. Mutually exclusive with `offset`.
+   *
+   * A cursor walk traverses **posting order** (`seq`), not the `(date, seq)`
+   * display order: posting order is the only one in which the journal is
+   * append-only, and therefore the only one a complete walk can rely on.
+   * `order` still chooses the direction.
    */
   after?: EntryCursor;
 }
@@ -65,11 +75,16 @@ export interface EntryPageOptions {
  * entry of a page as `after` to fetch the next one.
  *
  * ```ts
- * const page = await ledger.allEntries("asc", { limit: 50 });
- * const last = page.at(-1);
- * const next = last
- *   ? await ledger.allEntries("asc", { limit: 50, after: entryCursor(last) })
- *   : [];
+ * let cursor: EntryCursor | undefined;
+ * for (;;) {
+ *   const page = await ledger.allEntries("asc", {
+ *     limit: 50,
+ *     ...(cursor ? { after: cursor } : {}),
+ *   });
+ *   const last = page.at(-1);
+ *   if (!last) break;
+ *   cursor = entryCursor(last);
+ * }
  * ```
  */
 export function entryCursor(entry: Entry): EntryCursor {
@@ -78,7 +93,7 @@ export function entryCursor(entry: Entry): EntryCursor {
       "Cannot page from an entry with no journal sequence number (it was never persisted)",
     );
   }
-  return { date: entry.date, seq: entry.seq };
+  return { seq: entry.seq };
 }
 
 export interface Repository {

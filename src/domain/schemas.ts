@@ -83,14 +83,7 @@ export const entryPageSchema = z
   .object({
     limit: z.number().int().nonnegative().optional(),
     offset: z.number().int().nonnegative().optional(),
-    after: z
-      .object({
-        date: z.string().refine(isValidISODate, {
-          message: "must be a valid yyyy-mm-dd date",
-        }),
-        seq: z.number().int().positive(),
-      })
-      .optional(),
+    after: z.object({ seq: z.number().int().positive() }).optional(),
   })
   .refine((page) => !(page.after && page.offset), {
     message: "cannot combine a cursor (after) with an offset",

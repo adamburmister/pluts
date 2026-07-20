@@ -147,6 +147,7 @@ import { DurableObject } from "cloudflare:workers";
 import {
   AccountType,
   Amount,
+  entryCursor,
   Ledger,
   migrate,
   SqlStorageRepository,
@@ -211,11 +212,14 @@ await ledger.incomeStatement({ fromDate: "2024-01-01" }); // { revenue, expenses
 
 // The journal is unbounded — page it. Bounds must be non-negative integers.
 const page = await ledger.allEntries("desc", { limit: 50 }); // newest 50
-const last = page.at(-1);
 
-// Continue from a cursor: `after` names a row, so entries posted or backdated
-// between reads cannot make the walk repeat or skip. Use this for audit walks.
-await ledger.allEntries("desc", { limit: 50, after: entryCursor(last) });
+// Continue from a cursor: `after` names a row (the journal sequence number),
+// so entries posted or backdated between reads cannot make the walk repeat or
+// skip. A cursor walk runs in posting order — use it for audit walks.
+const last = page.at(-1);
+if (last) {
+  await ledger.allEntries("desc", { limit: 50, after: entryCursor(last) });
+}
 
 // `offset` names a position instead, and drifts under concurrent writes —
 // fine for a UI jumping to page 7, not for a walk that must be exact.

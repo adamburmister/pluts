@@ -449,22 +449,22 @@ export class SqlStorageRepository implements Repository {
         "allEntries takes either a cursor (after) or an offset, not both",
       );
     }
-    // Continue strictly past the cursor in the journal's (date, seq) order.
-    // Written out rather than as a row-value comparison so the predicate
-    // ports to any SQL backend implementing this Repository.
+    // A cursor walk runs in posting order (seq), not the (date, seq) display
+    // order: seq is append-only, so no row can ever appear behind the cursor.
+    // Ordering a walk by date would silently skip an entry backdated before
+    // the cursor's date after the walk passed that point.
     const cursorClause = page.after
       ? order === "asc"
-        ? " WHERE (date > ? OR (date = ? AND seq > ?))"
-        : " WHERE (date < ? OR (date = ? AND seq < ?))"
+        ? " WHERE seq > ?"
+        : " WHERE seq < ?"
       : "";
-    const cursorBinds = page.after
-      ? [page.after.date, page.after.date, page.after.seq]
-      : [];
+    const cursorBinds = page.after ? [page.after.seq] : [];
+    const orderClause = page.after ? `seq ${dir}` : `date ${dir}, seq ${dir}`;
     const rows = this.sql
       .exec<EntryRow>(
         `SELECT id, description, date, posted_at, seq
          FROM pluts_entries${cursorClause}
-         ORDER BY date ${dir}, seq ${dir}
+         ORDER BY ${orderClause}
          LIMIT ? OFFSET ?`,
         ...cursorBinds,
         limit,

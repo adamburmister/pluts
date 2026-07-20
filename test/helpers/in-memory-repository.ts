@@ -16,6 +16,7 @@ import {
 } from "../../src/domain/entry";
 import {
   IdempotencyConflictError,
+  RepositoryError,
   ValidationError,
 } from "../../src/domain/errors";
 import {
@@ -193,26 +194,29 @@ export class InMemoryRepository implements Repository {
     order: "asc" | "desc" = "desc",
     page: EntryPageOptions = {},
   ): Promise<Entry[]> {
+    const after = page.after;
+    const offset = page.offset ?? 0;
+    // Mirror the SQL repository's rejection: a fake that accepted these would
+    // let a unit test pass for options that throw in production.
+    if (after && offset > 0) {
+      throw new RepositoryError(
+        "allEntries takes either a cursor (after) or an offset, not both",
+      );
+    }
     const list = [...this.entries.values()];
-    // Deterministic journal order: date first, then posting sequence.
+    // A cursor walk runs in append-only posting order (seq), so no entry can
+    // appear behind the cursor; an uncursored read uses the (date, seq)
+    // display order.
     list.sort((a, b) =>
       order === "asc"
-        ? a.date.localeCompare(b.date) || a.seq - b.seq
-        : b.date.localeCompare(a.date) || b.seq - a.seq,
+        ? (after ? 0 : a.date.localeCompare(b.date)) || a.seq - b.seq
+        : (after ? 0 : b.date.localeCompare(a.date)) || b.seq - a.seq,
     );
-    // A cursor names a row, so continuation is stable across concurrent
-    // posts and backdated entries; an offset only names a position.
-    const after = page.after;
     const remaining = after
       ? list.filter((m) =>
-          order === "asc"
-            ? m.date > after.date ||
-              (m.date === after.date && m.seq > after.seq)
-            : m.date < after.date ||
-              (m.date === after.date && m.seq < after.seq),
+          order === "asc" ? m.seq > after.seq : m.seq < after.seq,
         )
       : list;
-    const offset = page.offset ?? 0;
     const windowed =
       page.limit === undefined
         ? remaining.slice(offset)
