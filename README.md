@@ -210,14 +210,17 @@ await ledger.balanceSheet("2024-12-31"); // { assets, liabilities, equity, netIn
 await ledger.incomeStatement({ fromDate: "2024-01-01" }); // { revenue, expenses, netIncome }
 
 // The journal is unbounded — page it. Bounds must be non-negative integers.
-await ledger.allEntries("desc", { limit: 50 }); // newest 50
-await ledger.allEntries("desc", { limit: 50, offset: 50 }); // the next page
-```
+const page = await ledger.allEntries("desc", { limit: 50 }); // newest 50
+const last = page.at(-1);
 
-`offset` addresses a position, not a row: an entry posted or backdated between
-two page reads shifts the ordering, so a later page can repeat or skip an
-entry. For an audit walk that must not miss rows, continue from the last
-`(date, seq)` you saw rather than by offset.
+// Continue from a cursor: `after` names a row, so entries posted or backdated
+// between reads cannot make the walk repeat or skip. Use this for audit walks.
+await ledger.allEntries("desc", { limit: 50, after: entryCursor(last) });
+
+// `offset` names a position instead, and drifts under concurrent writes —
+// fine for a UI jumping to page 7, not for a walk that must be exact.
+await ledger.allEntries("desc", { limit: 50, offset: 50 });
+```
 
 Every report is a **single** query, so all of its figures come from one
 consistent view of the ledger: a write landing mid-report cannot produce a

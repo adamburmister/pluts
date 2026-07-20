@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it } from "vitest";
+import { type EntryCursor, entryCursor } from "../../src/db/repository";
 import { migrate } from "../../src/db/schema";
 import { SqlStorageRepository } from "../../src/db/sqlite-storage-repository";
 import { computeBalance } from "../../src/domain/account";
@@ -214,6 +215,52 @@ describe("report queries (real SQLite)", () => {
       expenses: 4000n,
       netIncome: 25000n + 3n * huge.minor - 4000n,
     });
+  });
+
+  it("walks the whole journal with a cursor despite concurrent writes", async () => {
+    // The scenario offset paging cannot survive: an entry is posted, and a
+    // second is *backdated* ahead of the walk, between two page reads. Under
+    // OFFSET the ordering shifts beneath the cursor and entries repeat or
+    // vanish; `after` names a row, so the walk stays exact.
+    const seen: string[] = [];
+    let cursor: EntryCursor | undefined;
+    for (let page = 0; page < 3; page++) {
+      const entries = await ledger.allEntries("asc", {
+        limit: 1,
+        ...(cursor ? { after: cursor } : {}),
+      });
+      const entry = entries[0];
+      if (!entry) break;
+      seen.push(entry.description);
+      cursor = entryCursor(entry);
+
+      await ledger.postEntry({
+        description: `Interleaved ${page}`,
+        date: "2026-12-31",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(1) }],
+        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(1) }],
+      });
+      await ledger.postEntry({
+        description: `Backdated ${page}`,
+        date: "2025-01-01",
+        debits: [{ accountName: "Cash", amount: Amount.fromMajor(2) }],
+        credits: [{ accountName: "Revenue", amount: Amount.fromMajor(2) }],
+      });
+    }
+    // No repeats, no skips: the three seeded entries in journal order, even
+    // though six entries were inserted around the walk.
+    expect(seen).toEqual(["Invest", "Sale", "Depreciate"]);
+  });
+
+  it("refuses to combine a cursor with an offset", async () => {
+    const [first] = await ledger.allEntries("asc", { limit: 1 });
+    if (!first) throw new Error("expected a seeded entry");
+    await expect(
+      ledger.allEntries("asc", { after: entryCursor(first), offset: 1 }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      repo.allEntries("asc", { after: entryCursor(first), offset: 1 }),
+    ).rejects.toBeInstanceOf(RepositoryError);
   });
 
   it("windows the journal with limit and offset", async () => {

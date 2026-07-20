@@ -74,7 +74,7 @@ export const dateRangeSchema = z
   .optional();
 
 /**
- * Optional journal paging window. Both bounds are non-negative integers: a
+ * Optional journal paging window. `limit`/`offset` are non-negative integers: a
  * negative `limit` reaching SQLite means "no limit" (that is how the repository
  * spells an absent limit), so an unvalidated `limit` from a query string would
  * silently hydrate the entire journal — the opposite of what the caller asked.
@@ -83,6 +83,18 @@ export const entryPageSchema = z
   .object({
     limit: z.number().int().nonnegative().optional(),
     offset: z.number().int().nonnegative().optional(),
+    after: z
+      .object({
+        date: z.string().refine(isValidISODate, {
+          message: "must be a valid yyyy-mm-dd date",
+        }),
+        seq: z.number().int().positive(),
+      })
+      .optional(),
+  })
+  .refine((page) => !(page.after && page.offset), {
+    message: "cannot combine a cursor (after) with an offset",
+    path: ["offset"],
   })
   .optional();
 

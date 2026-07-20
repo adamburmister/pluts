@@ -1,8 +1,10 @@
-export type {
-  AccountTotals,
-  AccountTotalsOptions,
-  EntryPageOptions,
-  Repository,
+export {
+  type AccountTotals,
+  type AccountTotalsOptions,
+  type EntryCursor,
+  type EntryPageOptions,
+  entryCursor,
+  type Repository,
 } from "./db/repository.js";
 export {
   getLedgerMeta,

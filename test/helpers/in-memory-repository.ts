@@ -200,11 +200,23 @@ export class InMemoryRepository implements Repository {
         ? a.date.localeCompare(b.date) || a.seq - b.seq
         : b.date.localeCompare(a.date) || b.seq - a.seq,
     );
+    // A cursor names a row, so continuation is stable across concurrent
+    // posts and backdated entries; an offset only names a position.
+    const after = page.after;
+    const remaining = after
+      ? list.filter((m) =>
+          order === "asc"
+            ? m.date > after.date ||
+              (m.date === after.date && m.seq > after.seq)
+            : m.date < after.date ||
+              (m.date === after.date && m.seq < after.seq),
+        )
+      : list;
     const offset = page.offset ?? 0;
     const windowed =
       page.limit === undefined
-        ? list.slice(offset)
-        : list.slice(offset, offset + page.limit);
+        ? remaining.slice(offset)
+        : remaining.slice(offset, offset + page.limit);
     return windowed.map((m) => this.toEntry(m));
   }
 

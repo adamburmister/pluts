@@ -27,12 +27,58 @@ export interface AccountTotalsOptions {
   range?: DateRange;
 }
 
+/**
+ * A position in the journal's `(date, seq)` ordering — the last entry a
+ * caller has already seen. Build one with {@link entryCursor}.
+ */
+export interface EntryCursor {
+  /** The entry's ISO `yyyy-mm-dd` date. */
+  date: string;
+  /** The entry's journal sequence number. */
+  seq: number;
+}
+
 /** Optional windowing for {@link Repository.allEntries}. */
 export interface EntryPageOptions {
   /** Maximum number of entries to return. Omit for the whole journal. */
   limit?: number;
-  /** Number of entries to skip before collecting. Defaults to 0. */
+  /**
+   * Number of entries to skip before collecting. Defaults to 0.
+   *
+   * `offset` addresses a *position*, so an entry posted or backdated between
+   * two page reads shifts the ordering underneath it and the next page can
+   * repeat or skip an entry. Fine for a UI jumping to page 7; not for an
+   * audit walk that must see every entry exactly once — use `after`.
+   */
   offset?: number;
+  /**
+   * Continue strictly after this journal position, in the requested order.
+   * Unlike `offset` this names a *row*, so concurrent posts and backdated
+   * entries cannot make a continuation repeat or skip entries. Mutually
+   * exclusive with `offset`.
+   */
+  after?: EntryCursor;
+}
+
+/**
+ * The cursor identifying an entry's position in the journal — pass the last
+ * entry of a page as `after` to fetch the next one.
+ *
+ * ```ts
+ * const page = await ledger.allEntries("asc", { limit: 50 });
+ * const last = page.at(-1);
+ * const next = last
+ *   ? await ledger.allEntries("asc", { limit: 50, after: entryCursor(last) })
+ *   : [];
+ * ```
+ */
+export function entryCursor(entry: Entry): EntryCursor {
+  if (entry.seq === null) {
+    throw new TypeError(
+      "Cannot page from an entry with no journal sequence number (it was never persisted)",
+    );
+  }
+  return { date: entry.date, seq: entry.seq };
 }
 
 export interface Repository {
@@ -78,7 +124,8 @@ export interface Repository {
   /**
    * The journal, newest first by default. Pass `page` to window the result —
    * a full ledger's journal is unbounded, and every returned entry costs
-   * hydration work.
+   * hydration work. Continue a walk with `after` (stable) or `offset`
+   * (positional); see {@link EntryPageOptions}.
    */
   allEntries(order?: "asc" | "desc", page?: EntryPageOptions): Promise<Entry[]>;
 

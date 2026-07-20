@@ -466,15 +466,17 @@ export class Ledger {
 
   /**
    * The journal, newest first by default. A ledger's journal grows without
-   * bound, so pass `page` to window it: `allEntries("desc", { limit: 50 })`,
-   * then walk back with `offset`. Both bounds must be non-negative integers
-   * ({@link ValidationError} otherwise) — a negative limit reaching SQLite
-   * means "unbounded", the opposite of what a caller passing one intends.
+   * bound, so pass `page` to window it: `allEntries("desc", { limit: 50 })`.
    *
-   * `offset` addresses a position, not a row: an entry posted (or backdated)
-   * between two page reads shifts the ordering under the cursor, so a
-   * subsequent page can repeat or skip an entry. For an audit walk that must
-   * not miss rows, page by the last `(date, seq)` seen instead.
+   * Continue with `after: entryCursor(lastEntryOfThePage)` — a cursor names a
+   * *row*, so an entry posted or backdated between two reads cannot make the
+   * continuation repeat or skip entries. `offset` names a *position* and does
+   * drift that way; it is fine for a UI jumping to page 7, not for an audit
+   * walk. The two are mutually exclusive.
+   *
+   * `limit`/`offset` must be non-negative integers ({@link ValidationError}
+   * otherwise) — a negative limit reaching SQLite means "unbounded", the
+   * opposite of what a caller passing one intends.
    */
   async allEntries(
     order: "asc" | "desc" = "desc",
@@ -485,7 +487,8 @@ export class Ledger {
 
   /**
    * Validate a paging window before it reaches the repository. Throws
-   * {@link ValidationError} on a negative or non-integer bound.
+   * {@link ValidationError} on a negative or non-integer bound, a malformed
+   * cursor, or a cursor combined with an offset.
    */
   private parsePage(page: EntryPageOptions): EntryPageOptions {
     const parsed = entryPageSchema.safeParse(page);
@@ -495,10 +498,11 @@ export class Ledger {
         "Invalid page options",
       );
     }
-    const { limit, offset } = parsed.data ?? {};
+    const { limit, offset, after } = parsed.data ?? {};
     return {
       ...(limit !== undefined ? { limit } : {}),
       ...(offset !== undefined ? { offset } : {}),
+      ...(after !== undefined ? { after } : {}),
     };
   }
 

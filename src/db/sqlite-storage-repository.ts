@@ -444,12 +444,29 @@ export class SqlStorageRepository implements Repository {
     // `limit: -1` from a query string would return the whole journal.
     const limit = assertPageBound(page.limit, "limit") ?? -1;
     const offset = assertPageBound(page.offset, "offset") ?? 0;
+    if (page.after && offset > 0) {
+      throw new RepositoryError(
+        "allEntries takes either a cursor (after) or an offset, not both",
+      );
+    }
+    // Continue strictly past the cursor in the journal's (date, seq) order.
+    // Written out rather than as a row-value comparison so the predicate
+    // ports to any SQL backend implementing this Repository.
+    const cursorClause = page.after
+      ? order === "asc"
+        ? " WHERE (date > ? OR (date = ? AND seq > ?))"
+        : " WHERE (date < ? OR (date = ? AND seq < ?))"
+      : "";
+    const cursorBinds = page.after
+      ? [page.after.date, page.after.date, page.after.seq]
+      : [];
     const rows = this.sql
       .exec<EntryRow>(
         `SELECT id, description, date, posted_at, seq
-         FROM pluts_entries
+         FROM pluts_entries${cursorClause}
          ORDER BY date ${dir}, seq ${dir}
          LIMIT ? OFFSET ?`,
+        ...cursorBinds,
         limit,
         offset,
       )
