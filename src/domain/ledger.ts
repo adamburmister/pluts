@@ -5,13 +5,13 @@ import type {
   EntryWalkOptions,
   Repository,
 } from "../db/repository.js";
-import { type AccountDTO, toAccountDTO } from "./dto.js";
 import {
   type Account,
   accountNameKey,
   aggregateBalances,
   computeBalance,
 } from "./account.js";
+import { type AccountDTO, toAccountDTO } from "./dto.js";
 import {
   type AmountRecord,
   buildEntry,
