@@ -47,8 +47,16 @@ export interface BalanceSheet {
    * from the returned fields alone.
    */
   netIncome: bigint;
-  /** Assets - (Liabilities + Equity + Net Income). Should be zero in a balanced ledger. */
-  balanced: bigint;
+  /**
+   * The residual `assets - (liabilities + equity + netIncome)`: zero in a
+   * healthy ledger, and the size of the discrepancy when it is not.
+   *
+   * Named for what it measures rather than for the healthy case, so it cannot
+   * be confused with the boolean {@link TrialBalanceReport.balanced} — `if
+   * (sheet.imbalance)` reads the way it behaves, where `if (sheet.balanced)`
+   * on a `bigint` residual read backwards.
+   */
+  imbalance: bigint;
 }
 
 export interface IncomeStatement {
@@ -432,7 +440,7 @@ export class Ledger {
     const revenue = nets[AccountType.Revenue];
     const expenses = nets[AccountType.Expense];
     // Net income (revenue - expenses) is retained earnings, part of equity on
-    // a real balance sheet. The balanced check includes it so the accounting
+    // a real balance sheet. The residual includes it so the accounting
     // equation holds: Assets = Liabilities + Equity + Net Income.
     const netIncome = revenue - expenses;
     return {
@@ -440,7 +448,7 @@ export class Ledger {
       liabilities,
       equity,
       netIncome,
-      balanced: assets - (liabilities + equity + netIncome),
+      imbalance: assets - (liabilities + equity + netIncome),
     };
   }
 
