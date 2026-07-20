@@ -518,6 +518,10 @@ export class SqlStorageRepository implements Repository {
   async accountTotals(
     options: AccountTotalsOptions = {},
   ): Promise<AccountTotals[]> {
+    // An explicit empty list is a filter that matches nothing, not an absent
+    // filter. Widening it to every account would quietly pull in the totals a
+    // caller filtered out — omit `types` to ask for all of them.
+    if (options.types?.length === 0) return [];
     const rangeClause = dateRangeClause(options.range);
     const types = options.types ?? [];
     const typeClause =

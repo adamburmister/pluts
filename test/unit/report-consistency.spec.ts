@@ -7,6 +7,7 @@ import { Amount } from "../../src/domain/amount";
 import { RepositoryError, ValidationError } from "../../src/domain/errors";
 import { Ledger } from "../../src/domain/ledger";
 import { AccountType } from "../../src/domain/types";
+import { InMemoryRepository } from "../helpers/in-memory-repository";
 import { nodeSqlStorage } from "../helpers/node-sql-storage";
 
 /**
@@ -98,6 +99,16 @@ describe("report queries (real SQLite)", () => {
       types: [AccountType.Revenue, AccountType.Expense],
     });
     expect(income.map((t) => t.account.name)).toEqual(["Expense", "Revenue"]);
+  });
+
+  it("treats an empty type list as matching no account", async () => {
+    // A dynamically built empty filter must not widen to every account —
+    // that would pull back the very totals the caller filtered out. Both
+    // backends have to agree, so the in-memory double is checked alongside.
+    expect(await repo.accountTotals({ types: [] })).toEqual([]);
+    expect(await new InMemoryRepository().accountTotals({ types: [] })).toEqual(
+      [],
+    );
   });
 
   it("balanceByType equals the per-account computation", async () => {

@@ -17,7 +17,8 @@ export interface AccountTotals {
 /** Optional filters for {@link Repository.accountTotals}. */
 export interface AccountTotalsOptions {
   /**
-   * Restrict to accounts of these types. Omit for every account. A report
+   * Restrict to accounts of these types. Omit for every account; an explicit
+   * empty list matches no account at all (a filter, not its absence). A report
    * should ask only for the types it reports on: totals it never uses can
    * still fail the safe-integer bridge and take the report down with them.
    */
